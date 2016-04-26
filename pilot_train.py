@@ -37,12 +37,11 @@ flags.DEFINE_integer(
     "Define the hidden_size for training.")
 
 
-#flags.DEFINE_integer("batch_size", 2, "The number of movies processed in one full batch.")
 
 # the class with general empty class variables that are set by the code
 # and general parameters of which i'm not playing around with yet.
 class Configuration:
-    gpu=True
+    gpu= True
     batch_size=1.0
     prefix = ""
     feature_dimension = -1
@@ -109,6 +108,7 @@ class BigConfig(Configuration):
     """Big config, for real training.
         List of objects is obtained from pilot_data
     """
+    sample = 1
     dataset='generated'
     training_objects, validate_objects, test_objects = pilot_data.get_objects(dataset)
     
