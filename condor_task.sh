@@ -5,11 +5,11 @@
 TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
 model="$1"
-learning_rate="$2"
-max_grad_norm="$3"
-num_layers="$4"
-hidden_size="$5"
-num_steps="$6"
+#learning_rate="$2"
+#num_layers="$4"
+#hidden_size="$2"
+keep_prob="$2"
+#optimizer="$4"
 
 description=""
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
@@ -22,10 +22,6 @@ if [ ! -z $learning_rate ]; then
 	TASK="$TASK --learning_rate ${learning_rate}"
 	description="${description}_lr_$learning_rate"
 fi
-if [ ! -z $max_grad_norm ]; then 
-	TASK="$TASK --max_grad_norm ${max_grad_norm}"
-	description="${description}_mxgrad_$max_grad_norm"
-fi
 if [ ! -z $num_layers ]; then 
 	TASK="$TASK --num_layers ${num_layers}"
 	description="${description}_layers_$num_layers"
@@ -34,9 +30,17 @@ if [ ! -z $hidden_size ]; then
 	TASK="$TASK --hidden_size ${hidden_size}"
 	description="${description}_size_$hidden_size"
 fi
-if [ ! -z $num_steps ]; then 
-	TASK="$TASK --num_steps ${num_steps}"
-	description="${description}_steps_$num_steps"
+if [ ! -z $keep_prob ]; then 
+	TASK="$TASK --keep_prob ${keep_prob}"
+	description="${description}_drop_$keep_prob"
+fi
+if [ ! -z $log_directory ]; then 
+	TASK="$TASK --log_directory ${log_directory}"
+	description="${description}_log"
+fi
+if [ ! -z ${optimizer} ]; then 
+	TASK="$TASK --optimizer ${optimizer}"
+	description="${description}_opt_${optimizer}"
 fi
 echo $TASK
 # Delete previous log files if they are there
@@ -52,7 +56,7 @@ temp_dir="/users/visics/kkelchte/tensorflow/examples/pilot/.tmp"
 condor_file="${temp_dir}/condor${description}.condor"
 shell_file="${temp_dir}/run${description}.sh"
 
-mkdir $temp_dir
+mkdir -p $temp_dir
 #--------------------------------------------------------------------------------------------
 echo "Universe         = vanilla" > $condor_file
 echo "">> $condor_file
@@ -62,7 +66,7 @@ echo "RequestMemory    = 15G" >> $condor_file
 #echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
-echo "+RequestWalltime = 86400" >> $condor_file
+echo "+RequestWalltime = 360000" >> $condor_file
 #echo "+RequestWalltime = 10800" >> $condor_file
 echo "">> $condor_file
 #echo "Requirements = (machineowner == Visics)" >> $condor_file
@@ -94,9 +98,10 @@ echo "export PYTHONPATH=/users/visics/kkelchte/tensorflow/lib/python2.7/site-pac
 echo "cd /users/visics/kkelchte/tensorflow/examples/pilot">>$shell_file
 echo "echo 'went to directory ' $PWD">>$shell_file
 echo "python $TASK">>$shell_file
-echo "echo $TASK has finished. \n \n description: $description.\n \n $con' | mailx -s 'condor' klaas.kelchtermans@esat.kuleuven.be">>$shell_file
+echo "echo '$TASK has finished. \n \n description: $description.\n \n $condor_file' | mailx -s 'condor' klaas.kelchtermans@esat.kuleuven.be">>$shell_file
 
 chmod 755 $condor_file
 chmod 755 $shell_file
 
 condor_submit $condor_file
+#echo $condor_file

@@ -4,6 +4,12 @@ import tensorflow as tf
 import numpy as np
 import math
 
+class ModelError(Exception):
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
 class LSTMModel(object):
 
     def __init__(self, is_training, config):
@@ -19,7 +25,7 @@ class LSTMModel(object):
         self._cost = self.loss(config.output_size, config.gpu)
         
         if self._is_training:
-            self.training()
+            self.training(optimizer_type=config.optimizer)
         
         
         #learning_rate_summary = tf.scalar_summary("learning rate", self.lr)
@@ -48,7 +54,7 @@ class LSTMModel(object):
         # Build the LSTM Graph for testing
         with tf.variable_scope("LSTM"):
             with tf.device(device_name):
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=0.0)
+                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=0.9) #init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer: f = f'(0) + f_b(0.9) ==> c = f * c_-1 
                 if self.is_training and keep_prob < 1:
                     lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
@@ -97,12 +103,15 @@ class LSTMModel(object):
             self.w_hist = tf.histogram_summary(self._prefix+"_weights", weights)
             self.b_hist = tf.histogram_summary(self._prefix+"_biases", biases) 
             self.logits_hist = tf.histogram_summary(self._prefix+"_logits", logits)
+            
             #write away the last prediction of a series of steps
             preds = tf.argmax(logits,1)
-            self.preds_val = []
+            self.preds_val = [] #list of predictions of each batch
             for i in xrange(self._num_steps-1, self.batch_size*self._num_steps,self._num_steps):
-                # for each batch you should keep the last prediction
+                # for each num_steps period you should keep the last prediction
                 self.preds_val.append(tf.scalar_summary(self._prefix+"_predictions_b"+str((i-self._num_steps+1)/self._num_steps), preds[i]))
+            
+            #write away
             #self.preds_val_tot = []
             #for i in range(self._num_steps*self.batch_size):
             #    self.preds_val_tot.append(tf.scalar_summary(self._prefix+"_predictions", preds[i]))
@@ -146,7 +155,7 @@ class LSTMModel(object):
             #    self.targs_val_tot.append(tf.scalar_summary(self.prefix+"_targets", targs[i]))
         return loss
     
-    def training(self, gpu=True):
+    def training(self, gpu=True, optimizer_type='GradientDescent'):
         """
         ops required to compute and apply gradients
         """
@@ -164,13 +173,28 @@ class LSTMModel(object):
                 grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars), 5)# max_grad_norm = 5
                 #import pdb; pdb.set_trace()
                 # optimizer will apply calculated gradients at a certain training rate
-                optimizer = tf.train.GradientDescentOptimizer(self._lr)
+                if optimizer_type == 'RMSProp': 
+                    optimizer = tf.train.RMSPropOptimizer(self._lr, decay=0.9, momentum=0.0, epsilon=1e-10, use_locking=False, name='RMSProp')
+                elif optimizer_type == 'GradientDescent':
+                    optimizer = tf.train.GradientDescentOptimizer(self._lr)
+                elif optimizer_type == 'Momentum':
+                    optimizer = tf.train.MomentumOptimizer(self._lr, momentum=0.3, use_locking=False, name='Momentum')
+                elif optimizer_type == 'Adam':
+                    #beta1 and beta2 = exponential decay rates for the moment estimates mean and variance of the gradients
+                    #higher decay rate means slower adaption of new gradients
+                    optimizer = tf.train.AdamOptimizer(learning_rate=self._lr, beta1=0.9, beta2=0.999, epsilon=1e-08, use_locking=False, name='Adam')
+                elif optimizer_type == 'Adagrad':
+                    optimizer = tf.train.AdagradOptimizer(self._lr, initial_accumulator_value=0.1, use_locking=False, name='Adagrad')
+                #elif optimizer_type == 'Adadelta':
+                #    optimizer = tf.train.AdadeltaOptimizer(learning_rate=0.001, rho=0.95, epsilon=1e-08, use_locking=False, name='Adadelta')
+                else : 
+                    raise ModelError("This type of optimizer is not defined: "+optimizer_type)
+                    return -1
                 self._train_op = optimizer.apply_gradients(zip(grads, tvars))
                 
         
     def merge(self):
-        """
-        Specify which values are written down in the logfile and visualized on the tensorboard
+        """ Specify which values are written down in the logfile and visualized on the tensorboard
         for the case the network is unrolled for just a number of steps (return the last values)
         """
         list_of_tensors = [self.loss_val, 

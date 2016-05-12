@@ -51,41 +51,20 @@ def one_hot_labels(labels):
     for i in range(len(labels)):
         oh_labels[i,int(labels[i])]=1
     return oh_labels
-    
-def get_objects(dataset):
-    # given a dataset read out the train, validate and test_set.txt lists
-    # return 3 lists of objects
-    directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'
-    # read training objects from train_set.txt
-    training_objects = get_list(directory,'train_set.txt')
-    # read validate objects from validat_set.txt
-    validate_objects = get_list(directory,'val_set.txt')
-    # read test objects from test_set.txt
-    test_objects = get_list(directory,'test_set.txt')
-    return training_objects, validate_objects, test_objects
 
-def get_list(directory,filename):
-    # read the filename and return the list.
-    list_f = open(join(directory,filename),'r')
-    # read lines in a list
-    list_o = list_f.readlines()
-    # cut the newline and _one_cw at the end
-    list_o = [l[:-8] for l in list_o]
-    # cut the path, keep the name
-    list_o = [l[len(directory):] for l in list_o]
-    return list_o
 
 def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data'):
     """
     Create batches for the listed data objects by obtaining the features and the labels.
     Creating different batches of the same size
+    []
+    Used by prepare_data_list and pilot_train
     """
     
-    # get training data 
+    # get data 
     data = []
     labels = []
     min_steps = 100000
-    
     if feature_type == 'both':
         feature_types = ['app', 'flow']
     else:
@@ -103,18 +82,17 @@ def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data')
             #todo check and adapt if app and flow features dont have the same number of frames
             #if minfeat > feats.shape[0]:
             #    minfeat = feats.shape[0]
-        
-        #check here number of frames between app - flow - labels that you take minimum
         if 'flow' in feature_types:
-            feats_obj[0] = feats_obj[0][0:-1] #shorten rgb list
+            feats_obj[0] = feats_obj[0][0:-1] #shorten app list
             labels_obj = labels_obj[0:-1]
             
+        #check here number of frames between app - flow - labels that you take minimum
         #for ftype in feature_types:
         #    if feats_obj[ftype].shape[0] != minfeat: feats_obj[ftype]=feats_obj[ftype][]
-        #import pdb; pdb.set_trace()
+        
+        
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
-                
-        print "shape features:",feats_obj.shape
+        #print "shape features:",feats_obj.shape
         
         if not labels_obj.shape[0]==feats_obj.shape[0]:
             raise DataError("labels vs features mismatch: "+str(labels_obj.shape[0])+"!="+str(feats_obj.shape[0]))
@@ -146,33 +124,143 @@ def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data')
 
     #return data, labels
 
-#####################################################################
-
-def inputs(data_object, data_dir, batch_size):
-    """Read images of data_objects from data_dir and
-    return in batches according to batch_size
-    Args:
-        data_object: list of objects
-        data_dir: main directory to find data
-        batch_size: number of images per batch
-    Returns:
-        images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3] size.
-        labels: Labels. 1D tensor of [batch_size] size.
+def prepare_data_list(data_objects, sample_step=1,feature_type='app', dataset='generated'):
     """
+    Returns a list of tuples containing an array of features and an array of labels for each data object.
+    Mainly used for validation and test set as there is no unrolled network, so the sizes dont have to be grouped.
+    Used by prepare_data_grouped for reading in all data
+    """
+    object_list = []
+    for d_object in data_objects:
+        print "object: ",d_object
+        object_data, object_labels = prepare_data([d_object], sample_step=sample_step, feature_type=feature_type, dataset=dataset)
+        object_tuple = (object_data, object_labels)
+        object_list.append(object_tuple)
+    return object_list
+
+def prepare_data_grouped(data_objects, sample_step=1,feature_type='app', dataset='generated'):
+    """
+    Create a list of tuples. Each tuple contains a data and label. 
+    """
+    #list and sort the data according to the length
+    all_data = prepare_data_list(data_objects, sample_step=sample_step, feature_type=feature_type, dataset=dataset)
     
+    #sort data
+    sizes = [tu[0].shape[1] for tu in all_data]
+    sizes = np.asarray(sizes)
+    inds = np.arange(len(all_data))
+    dtype = [('length', int), ('index', int)]
+    sizes = [(sizes[i], inds[i]) for i in range(len(inds))]
+    sizes = np.array(sizes, dtype=dtype)
+    #print sizes
+    sizes = np.sort(sizes, order='length')
+    #print sizes
+    #create a list of differences in length
+    differences = [(0, sizes[0][1])]
+    differences[1:] = [(sizes[i+1][0]-sizes[i][0], sizes[i+1][1]) for i in range(len(inds)-1)]
+    #print differences
+    dtype = [('difference', int), ('index', int)]
+    differences = np.array(differences, dtype=dtype)
+    differences = np.sort(differences, order='difference')
+    #print differences
+    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(50/sample_step)]
+    #print split_indices
+    
+    # create a list of groups (lists) of movies which length  differs more than 50 frames
+    groups = []
+    current_group = []
+    for s in sizes:
+        #print 'size ',s[0],' index ',s[1]
+        if s[1] in split_indices:
+            groups.append(current_group)
+            print 'create new group: ', len(groups), 'last group len: ', len(current_group)
+            #create new group
+            current_group = []
+        #add to current group
+        current_group.append(all_data[s[1]])
+    groups.append(current_group)
+    print 'finished: groups: ', len(groups), 'last group len: ', len(current_group)
+    
+    # for each group create an array  of equal length and batches.
+    # if the movie is longer than average the last frames are cut away
+    # if the movie is shorter than average the last frame is repeated a number of times
+    batch_list = []
+    for g in groups:
+        #get average length of the movie[i][label][batch][frames]
+        average = int(sum([len(g[i][1][0][:]) for i in range(len(g))])/len(g))
+        print 'group average: ', average
+        batch_data = []
+        batch_labels = []
+        for m in g:
+            # m: tuple: (data,labels)
+            # data: np.array [batch, frames, features]
+            length = m[0].shape[1]
+            if length > average:
+                data = m[0][:,0:average,:]
+                labels = m[1][:,0:average,:]
+            elif length < average:
+                frame = m[0][:,-1,:]
+                frames = np.zeros((m[0].shape[0],average-length,m[0].shape[2]))
+                frames = frames + frame
+                data = np.concatenate((m[0], frames), axis=1);
+                label = m[1][:,-1,:]
+                labels = np.zeros((m[1].shape[0],average-length,m[1].shape[2]))
+                labels = labels + label
+                labels = np.concatenate((m[1], labels), axis=1);
+            else:
+                data = m[0]
+                labels = m[1]
+            batch_data.append(data)
+            batch_labels.append(labels)
+        #import pdb; pdb.set_trace()
+        batch_data = np.concatenate(batch_data)    
+        batch_labels = np.concatenate(batch_labels)   
+        batch_list.append((batch_data, batch_labels))
+    return batch_list
+
+
+def get_objects(dataset):
+    # given a dataset read out the train, validate and test_set.txt lists
+    # return 3 lists of objects
+    directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'
+    # read training objects from train_set.txt
+    training_objects = get_list(directory,'train_set.txt')
+    # read validate objects from validat_set.txt
+    validate_objects = get_list(directory,'val_set.txt')
+    # read test objects from test_set.txt
+    test_objects = get_list(directory,'test_set.txt')
+    return training_objects, validate_objects, test_objects
+
+def get_list(directory,filename):
+    # read the filename and return the list.
+    list_f = open(join(directory,filename),'r')
+    # read lines in a list
+    list_o = list_f.readlines()
+    # cut the newline and _one_cw at the end
+    list_o = [l[:-8] for l in list_o]
+    # cut the path, keep the name
+    list_o = [l[len(directory):] for l in list_o]
+    return list_o
 
 
 #####################################################################
+
 if __name__ == '__main__':
     print "-----------------------------"
     print "Run test module of pilot_data"
     print "-----------------------------"
     
+    #data_objects=['modeldaa','modelbbc','modelabe','modelbae','modelacc','modelbca']
+    #mylist=prepare_data_grouped(data_objects, feature_type='app', sample_step=8)
+    #print type(mylist)
+    
     dataset='generated'
     training_objects, validate_objects, test_objects = get_objects(dataset)
+    testset = prepare_data_list(test_objects, feature_type='both')
+    validationset = prepare_data_list(validate_objects, feature_type='both')
+    trainingset = prepare_data_grouped(training_objects, feature_type='app', sample_step=16)
     
-    print validate_objects
-    print test_objects
+    #print type(trainingset)
     
     #training_data, training_labels = prepare_data(training_objects, sample_step=100, feature_type='both')
     #print "labels: "+str(training_labels[1,0])
