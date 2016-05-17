@@ -5,11 +5,13 @@
 TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
 model="$1"
-#learning_rate="$2"
-#num_layers="$4"
+learning_rate="$2"
+normalized="$5"
 #hidden_size="$2"
-keep_prob="$2"
-#optimizer="$4"
+keep_prob="$3"
+optimizer="$4"
+random_order="$6"
+#log_tag="$5" #give the job an extra tag to discriminate from other parallel jobs
 
 description=""
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
@@ -22,10 +24,6 @@ if [ ! -z $learning_rate ]; then
 	TASK="$TASK --learning_rate ${learning_rate}"
 	description="${description}_lr_$learning_rate"
 fi
-if [ ! -z $num_layers ]; then 
-	TASK="$TASK --num_layers ${num_layers}"
-	description="${description}_layers_$num_layers"
-fi
 if [ ! -z $hidden_size ]; then 
 	TASK="$TASK --hidden_size ${hidden_size}"
 	description="${description}_size_$hidden_size"
@@ -34,13 +32,21 @@ if [ ! -z $keep_prob ]; then
 	TASK="$TASK --keep_prob ${keep_prob}"
 	description="${description}_drop_$keep_prob"
 fi
-if [ ! -z $log_directory ]; then 
-	TASK="$TASK --log_directory ${log_directory}"
-	description="${description}_log"
-fi
 if [ ! -z ${optimizer} ]; then 
 	TASK="$TASK --optimizer ${optimizer}"
 	description="${description}_opt_${optimizer}"
+fi
+if [ ! -z $normalized ]; then 
+	TASK="$TASK --normalized ${normalized}"
+	description="${description}_norm_$normalized"
+fi
+if [ ! -z $random_order ]; then 
+	TASK="$TASK --random_order ${random_order}"
+	description="${description}_norm_$random_order"
+fi
+if [ ! -z $log_tag ]; then 
+	TASK="$TASK --log_tag ${log_tag}"
+	description="${description}_${log_tag}"
 fi
 echo $TASK
 # Delete previous log files if they are there

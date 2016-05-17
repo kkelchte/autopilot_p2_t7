@@ -3,6 +3,7 @@ import pilot_data
 import pilot as pilot
 import random
 import time
+import scipy.io as sio
 
 import tensorflow as tf
 import numpy as np
@@ -14,13 +15,21 @@ flags = tf.flags
 logging = tf.logging
 
 FLAGS = flags.FLAGS
-
+flags.DEFINE_boolean(
+    "normalized", None,
+    "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
+flags.DEFINE_boolean(
+    "random_order", None,
+    "Whether or not the batches during 1 epoch are shuffled in random order.")
 flags.DEFINE_string(
     "model", "small",
     "A type of model. Possible options are: small, medium, big and dumpster.")
 flags.DEFINE_string(
     "log_directory", "/esat/qayd/kkelchte/tensorflow/lstm_logs/",
     "this is the directory for log files that are visualized by tensorboard")
+flags.DEFINE_string(
+    "log_tag", "",
+    "an extra tag to give some information about the job")
 flags.DEFINE_float(
     "learning_rate", "0",
     "Define the learning rate for training.")
@@ -43,11 +52,12 @@ flags.DEFINE_string(
 # and general parameters of which i'm not playing around with yet.
 class Configuration:
     gpu= True
+    random_order=True
     batch_size=1
     prefix = ""
     feature_dimension = -1
     output_size = -1
-    number_of_samples = 500 #number of times the output is memorized over the full test and validation set (13 to 15 movies), now only used for test configuration to speed things up
+    number_of_samples = 500 
     sample = 16 #the training data will be downsampled in time with i%sample==0
     init_scale = 0.1
     learning_rate = 0.01
@@ -60,7 +70,8 @@ class Configuration:
     keep_prob = 1.0 #1.0 #dropout
     lr_decay = 1 / 1.15
     optimizer = 'Adam'
-    dataset = 'data'
+    normalized = False
+    dataset = 'generated'
     feature_type = 'both' #flow or app or both
     training_objects = ['dumpster', 'box']
     validate_objects = ['box']
@@ -70,12 +81,11 @@ class Configuration:
 class SmallConfig(Configuration):
     """small config, for testing."""
     sample = 20
-    num_layers = 1
-    hidden_size = 1 #dimensionality of cell state and output
+    num_layers = 2
+    hidden_size = 10 #dimensionality of cell state and output
     max_epoch = 2
     max_max_epoch = 10
-    dataset = 'generated'
-    training_objects = ['modeldaa','modelcba','modelfee']
+    training_objects = ['modeldaa']#,'modelcba','modelfee']
     validate_objects = ['modeldaa']
     test_objects = ['modelaaa']
     feature_type = 'app' #flow or app or both
@@ -87,7 +97,6 @@ class GPUConfig(Configuration):
     max_epoch = 3
     max_max_epoch = 6
     feature_type='app'
-    dataset = 'generated'
     training_objects = ['modeldde']#, 'modelffc']
     validate_objects = ['modeldde']
     test_objects = ['modeldde']
@@ -99,7 +108,6 @@ class MediumConfig(Configuration):
     hidden_size = 10 #dimensionality of cell state and output
     max_epoch = 50
     max_max_epoch = 100
-    dataset = 'generated'
     training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
     validate_objects = ['modeldea','modelabe']
     test_objects = ['modelaaa', 'modelccc']
@@ -109,11 +117,10 @@ class BigConfig(Configuration):
     """Big config, for real training.
         List of objects is obtained from pilot_data
     """
-    dataset='generated'
-    training_objects, validate_objects, test_objects = pilot_data.get_objects(dataset)
+    training_objects, validate_objects, test_objects = pilot_data.get_objects(Configuration.dataset)
     
 #def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
-def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100):
+def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100, matfile = ""):
     # In one epoch, the model trains/validates/tests in different minibatch runs
     # The size of the minibatch is defined by the num_steps the LSTM is unrolled in time
     print "num_steps: ",num_steps
@@ -129,11 +136,19 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
         feed_dict = {model.inputs: data[:,:,:], 
                      model.initial_state: state, 
                      model.targets: targets[:,:,:]}
-        outputs, state, costs, _ = session.run([model.logits, model.state, model.cost, eval_op],feed_dict)
-        trgts = targets.reshape(outputs.shape[0],outputs.shape[1])
+        outputs, states, costs, _ = session.run([model.logits, model.states, model.cost, eval_op],feed_dict)
+        #import pdb; pdb.set_trace()
+        trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
         score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
         total = data.shape[0]*num_steps
-        #import pdb; pdb.set_trace()
+        
+        #
+        # Keep track of cell states
+        if(writer != None) and (matfile != ""):
+            #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
+            d = {'states': states, 'targets':trgts}
+            sio.savemat(matfile,d, appendmat=True)
+        
         #write the first steps away
         for i in range(num_steps):
             pred = np.argmax(outputs[i,:])
@@ -150,6 +165,7 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
         return score, costs, total
     
     #loop over frames in steps of size 1
+    list_of_states = []
     for f in range(data.shape[1]-num_steps+1):
         feed_dict = {model.inputs: data[:,f:f+num_steps,:], 
                      model.initial_state: state, 
@@ -159,20 +175,22 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
         #import pdb; pdb.set_trace()
         if ( write_freq != 0) and not (writer == None):
             if (f % write_freq) == 0:
-                outputs, state, current_loss, _, summary_str= session.run([model.logits, model.state, model.cost, eval_op, model.merge()],feed_dict)
+                outputs, state, states, current_loss, _, summary_str= session.run([model.logits, model.state, model.states, model.cost, eval_op, model.merge()],feed_dict)
                 writer.add_summary(summary_str, f)
                 #print '----------------------------im writing away every write frequency'
         #in case frames - steps < 100 ==> save every frame because there are less than 100 steps
         #the summary writer will only record the last <100 steps
         elif (write_freq == 0) and not (writer == None):
-            outputs, state, current_loss, _, summary_str= session.run([model.logits, model.state, model.cost, eval_op, model.merge()],feed_dict)
+            outputs, state, states, current_loss, _, summary_str= session.run([model.logits, model.state, model.states,model.cost, eval_op, model.merge()],feed_dict)
             writer.add_summary(summary_str, f)
             #print '--------------------------im writing away'
         else:
             # outputs is of shape (num_steps*batchsize, outputsize)
-            outputs, state, current_loss, _= session.run([model.logits, model.state, model.cost, eval_op],feed_dict)
+            outputs, state, states, current_loss, _= session.run([model.logits, model.state, model.states,model.cost, eval_op],feed_dict)
+            
         iters += data.shape[0]
-        
+        list_of_states.append(state)
+	
 	#maybe add different way of calculating score and prediction when working with num_steps = -1 ~ video length
         for b in range(data.shape[0]):
             if np.argmax(outputs[b*num_steps]) == np.argmax(targets[b,f,:]):
@@ -182,7 +200,15 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
                     %(f, b, np.argmax(targets[b,f,:]), np.argmax(outputs[b*num_steps]),
                     iters * data.shape[0] / (time.time() - start_time)))    
         costs += current_loss
-    
+    # Keep track of cell states
+    if(writer != None) and (matfile != ""):
+        #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
+        states = np.concatenate(list_of_states)
+        #import pdb; pdb.set_trace()
+        trgts = targets.reshape((-1,outputs.shape[1]))
+        d = {'states': states, 'targets': targets}
+        sio.savemat(matfile,d, appendmat=True)
+        
     if verbose:
         print "Accuracy: ",(score/iters)
     #import pdb; pdb.set_trace()
@@ -253,16 +279,24 @@ def main(_):
     if FLAGS.optimizer != "": 
         config.optimizer = FLAGS.optimizer
         logfolder = logfolder + "_opt_"+ str(FLAGS.optimizer)
-    
+    if FLAGS.normalized != None: 
+        config.normalized = FLAGS.normalized
+        logfolder = logfolder + "_norm_"+ str(FLAGS.normalized)
+    if FLAGS.random_order != None: 
+        config.random_order = FLAGS.random_order
+        logfolder = logfolder + "_random_order_"+ str(FLAGS.random_order)
+    if FLAGS.log_tag != "": 
+        logfolder = logfolder + "_"+ str(FLAGS.log_tag)
+        
     #delete logfolder if its already used otherwise it gets huge
     shutil.rmtree(logfolder,ignore_errors=True)
     print 'make logfolder: ', logfolder
     # Trainingdata is a list of tuples (data, labels), each tuple corresponds to one training group
     # data is an array of shape [batch_of_movies, movie_length, feature_dimension]
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
-    training_data_list = pilot_data.prepare_data_grouped(config.training_objects, config.sample, config.feature_type, config.dataset)
-    validate_data_list = pilot_data.prepare_data_list(config.validate_objects, config.sample, config.feature_type, config.dataset)
-    test_data_list = pilot_data.prepare_data_list(config.test_objects, config.sample, config.feature_type, config.dataset)
+    training_data_list = pilot_data.prepare_data_grouped(config.training_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
+    validate_data_list = pilot_data.prepare_data_list(config.validate_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
+    test_data_list = pilot_data.prepare_data_list(config.test_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
     
     #import pdb; pdb.set_trace()
     
@@ -363,48 +397,47 @@ def main(_):
             print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mtrain.lr)))
             
             ### Train the model
-            minacc = 1.0
-            maxper = 0.0
+            acc = 0.0
+            per = 0.0
             chosen_model = int(random.uniform(0,len(trainingmodels))) #choose 1 model from which the first movie is recorded
             indices = range(len(trainingmodels))
-            random.shuffle(indices)
+            if config.random_order: random.shuffle(indices)
             for j in indices:
                 if j == chosen_model : train_writer = writer
                 else : train_writer = None
-                results = run_epoch(session, trainingmodels[j], training_data_list[j][0], training_data_list[j][1], trainingmodels[j].train_op, num_steps = training_data_list[j][0].shape[1], writer = train_writer, verbose = False)
+                results = run_epoch(session, trainingmodels[j], training_data_list[j][0], training_data_list[j][1], trainingmodels[j].train_op, num_steps = training_data_list[j][0].shape[1], writer = train_writer, verbose = False, matfile=logfolder+"/trainstates_"+str(i)+".mat")
                 train_perplexity = np.exp(results[1] / results[2])
                 train_accuracy = results[0]/results[2]+0.000
-                print("Epoch: %d Train Accuracy: %.3f" % (i + 1, train_accuracy))
-                if minacc > train_accuracy: minacc = train_accuracy
-                if maxper < train_perplexity: maxper = train_perplexity
+                print("Train Accuracy: %.3f" % ( train_accuracy))
+                acc = acc+train_accuracy/len(trainingmodels)
+                per = per+train_perplexity/len(trainingmodels)
             # write away results of last movie
             if(writer_overview != None): 
-                summary_str= session.run(merge_t,{accuracy : minacc, perplexity: maxper})
+                summary_str= session.run(merge_t,{accuracy : acc, perplexity: per})
                 writer_overview.add_summary(summary_str, i)
-                print("Epoch: %d Final Accuracy: %.3f" % (i + 1, minacc))
-            
-            ### Validate the model
-            minacc = 100.0
-            maxper = 0.0
+                print("Epoch: %d Final Train Accuracy: %.3f" % (i + 1, acc))
+                
+            #### Validate the model
+            acc = 0.0
+            per = 0.0
             chosen_model = int(random.uniform(0,len(validate_data_list)))
             indices = range(len(validate_data_list))
-            random.shuffle(indices)
+            if config.random_order : random.shuffle(indices)
             for j in indices:
                 # write away prediction results of last movie
                 if j == chosen_model : val_writer = writer
                 else : val_writer = None
                 #import pdb; pdb.set_trace()
-                results = run_epoch(session, mvalid, validate_data_list[j][0], validate_data_list[j][1], tf.no_op(), writer = val_writer, number_of_samples = valid_config.number_of_samples, verbose = False)
+                results = run_epoch(session, mvalid, validate_data_list[j][0], validate_data_list[j][1], tf.no_op(), writer = val_writer, number_of_samples = valid_config.number_of_samples, verbose = False, matfile=logfolder+"/valstates_"+str(i)+".mat")
                 valid_perplexity = np.exp(results[1] / results[2])
                 valid_accuracy = results[0]/results[2]
-                print("Epoch: %d Valid Accuracy: %.3f" % (i + 1, valid_accuracy))
-                if minacc > valid_accuracy: minacc = valid_accuracy
-                if maxper < valid_perplexity: maxper = valid_perplexity
+                print("Valid Accuracy: %.3f" % (valid_accuracy))
+                acc = acc+valid_accuracy/len(validate_data_list)
+                per = per+valid_perplexity/len(validate_data_list)
             if(writer_overview != None): 
-                #summary_str= session.run(merge_v,{score : results[0], cost: results[1], total: results[2]})
-                summary_str= session.run(merge_v,{accuracy : minacc, perplexity: maxper})
+                summary_str= session.run(merge_v,{accuracy : acc, perplexity: per})
                 writer_overview.add_summary(summary_str, i)
-                print("Epoch: %d Final Accuracy: %.3f" % (i + 1, minacc))
+                print("Epoch: %d Final Valid Accuracy: %.3f" % (i + 1, acc))
         
         # Test the model
         location = logfolder+"/test"
@@ -415,15 +448,35 @@ def main(_):
             else : test_writer = None
             results = run_epoch(session, mtest, test_data_list[j][0], test_data_list[j][1], tf.no_op(), writer = test_writer, verbose=True, number_of_samples = test_config.number_of_samples)
             test_perplexity = np.exp(results[1] / results[2])
-            print("Test Perplexity: %.3f" % test_perplexity)
+            print("Test perplexity: %.3f" % test_perplexity)
         
         # Save the variables to disk.
         save_path = saver.save(session, logfolder+"/model.ckpt")
         print("Model saved in file: %s" % save_path)
         
-    print "DONE: ", (time.time()-start_time)/60, " minutes"
-        #import pdb; pdb.set_trace()
-            
-
+    duration = (time.time()-start_time)
+    duration_message = "time: "
+    if duration > 60:
+        duration_message = duration_message+str(int(duration%60))+"sec "
+        duration = int(duration/60) #number of minutes
+        if duration > 60:
+            duration_message = duration_message+str(int(duration%60))+"min "
+            duration = int(duration/60) #number of hours
+            if duration > 24:
+                duration_message = duration_message+str(int(duration%60))+"hours "
+                duration = int(duration/24) #number of days
+                duration_message = duration_message+str(duration)+"days."
+            else:
+                duration_message = duration_message+str(duration)+"hours."
+        else:
+            duration_message = duration_message+str(duration)+"min."
+    else:
+        duration_message = duration_message+str(duration)+"sec."
+                
+                
+    
+    
+    print "DONE: "+duration_message
+    
 if __name__ == '__main__':
     tf.app.run() 

@@ -10,6 +10,7 @@ import numpy as np
 import tensorflow as tf
 from os import listdir
 from os.path import isfile,join
+import time
 
 
 class DataError(Exception):
@@ -20,7 +21,7 @@ class DataError(Exception):
  
 def extract_features(filename):
     """Extract the PCNN features from a mat file into an ndarray [features of frame 0, frame 1, frame 2, ...] """
-    print 'Extracting '+str(filename)
+    #print 'Extracting '+str(filename)
     data = sio.loadmat(filename)
     feats = data['features'][0,0][1]
     if feats.shape[1]!=4096:
@@ -53,12 +54,13 @@ def one_hot_labels(labels):
     return oh_labels
 
 
-def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data'):
+def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data', normalized=False):
     """
     Create batches for the listed data objects by obtaining the features and the labels.
     Creating different batches of the same size
     []
     Used by prepare_data_list and pilot_train
+    returns a 3D array with first dimension the index of the movie, [movie, frame, feature]
     """
     
     # get data 
@@ -89,8 +91,6 @@ def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data')
         #check here number of frames between app - flow - labels that you take minimum
         #for ftype in feature_types:
         #    if feats_obj[ftype].shape[0] != minfeat: feats_obj[ftype]=feats_obj[ftype][]
-        
-        
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
         #print "shape features:",feats_obj.shape
         
@@ -115,16 +115,26 @@ def prepare_data(data_objects, sample_step=1,feature_type='app', dataset='data')
         j=0
         for i in range(min_steps):
             if (i%sample_step) == 0:
-                #import pdb; pdb.set_trace()
                 ds_data[b,j]= data[b][i]
                 ds_labels[b,j]=labels[b][i]
                 j=j+1
-    
+    #Normalize the subsampled features if necessary
+    if normalized:
+        norm_data = np.zeros(ds_data.shape)
+        data = sio.loadmat('mean_variance_'+feature_type+'.mat')
+        mean = data['mean']
+        variance = data['variance']
+        epsilon = 0.001
+        for i in range(ds_data.shape[0]):
+            for j in range(ds_data.shape[1]):
+                norm_data[i,j,:]=(ds_data[i,j,:]-mean[0])/(np.sqrt(variance[0])+epsilon)
+        ds_data = norm_data
+        #import pdb; pdb.set_trace()
     return ds_data, ds_labels
 
     #return data, labels
 
-def prepare_data_list(data_objects, sample_step=1,feature_type='app', dataset='generated'):
+def prepare_data_list(data_objects, sample_step=1,feature_type='app', dataset='generated', normalized=False):
     """
     Returns a list of tuples containing an array of features and an array of labels for each data object.
     Mainly used for validation and test set as there is no unrolled network, so the sizes dont have to be grouped.
@@ -133,17 +143,17 @@ def prepare_data_list(data_objects, sample_step=1,feature_type='app', dataset='g
     object_list = []
     for d_object in data_objects:
         print "object: ",d_object
-        object_data, object_labels = prepare_data([d_object], sample_step=sample_step, feature_type=feature_type, dataset=dataset)
+        object_data, object_labels = prepare_data([d_object], sample_step=sample_step, feature_type=feature_type, dataset=dataset, normalized=normalized)
         object_tuple = (object_data, object_labels)
         object_list.append(object_tuple)
     return object_list
 
-def prepare_data_grouped(data_objects, sample_step=1,feature_type='app', dataset='generated'):
+def prepare_data_grouped(data_objects, sample_step=1,feature_type='app', dataset='generated', normalized=False):
     """
     Create a list of tuples. Each tuple contains a data and label. 
     """
     #list and sort the data according to the length
-    all_data = prepare_data_list(data_objects, sample_step=sample_step, feature_type=feature_type, dataset=dataset)
+    all_data = prepare_data_list(data_objects, sample_step=sample_step, feature_type=feature_type, dataset=dataset, normalized=normalized)
     
     #sort data
     sizes = [tu[0].shape[1] for tu in all_data]
@@ -218,7 +228,6 @@ def prepare_data_grouped(data_objects, sample_step=1,feature_type='app', dataset
         batch_list.append((batch_data, batch_labels))
     return batch_list
 
-
 def get_objects(dataset):
     # given a dataset read out the train, validate and test_set.txt lists
     # return 3 lists of objects
@@ -242,23 +251,85 @@ def get_list(directory,filename):
     list_o = [l[len(directory):] for l in list_o]
     return list_o
 
-
+def calculate_mean_variance(data_objects, dataset = 'generated',feature_type='both'):
+    """
+    go through all data_objects and calculate the mean and variance.
+    Args:
+        data_objects: list of objects in dataset
+        dateset: the folder in qayd/kkelchte/simulation where the objects can be found
+        feature_type: appearance app, flow or both correspond for the .mat files
+    """
+    #Define number of total frames in data_objects
+    #total = 0
+    #for data_object in data_objects:
+    #    directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
+    #    for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
+    #        total = total + extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw.mat').shape[0]
+    #print 'Total: ', total
+    # calculate the mean of all feature vectors over all data objects
+    if feature_type == 'both':
+        feature_types = ['app', 'flow']
+    else:
+        feature_types = [feature_type]
+    means = []
+    nums  = []
+    for ftype in range(len(feature_types)): #loop over feature types 'app' and 'flow' or one of them
+        mean = np.zeros(4096, dtype=np.float64)
+        num = 0 #keep track of number of features
+        for data_object in data_objects:
+            directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
+            feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw.mat')
+            #print 'feats: ',feats[0]
+            mean = mean + feats.sum(axis=0)
+            num = num + feats.shape[0]
+        mean = mean / num
+        means.append(mean)
+        nums.append(num)
+        print 'mean: ', mean
+    # calculate the variance of all feature vectors over all data objects
+    variances = []
+    for ftype in range(len(feature_types)): #loop over feature types 'app' and 'flow' or one of them
+        variance = np.zeros(4096, dtype=np.float64)
+        for data_object in data_objects:
+            directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
+            feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw.mat')
+            diff = np.zeros(4096, dtype=np.float64)
+            for feat in feats:
+                diff = diff + (feat - mean)**2
+            variance = variance + diff/nums[ftype]
+            
+        variances.append(variance)
+        print 'variance: ', variance
+    mean = np.concatenate(means)
+    #import pdb; pdb.set_trace()
+    variance = np.concatenate(variances)
+    info = {"mean":mean, "variance":variance}
+    sio.savemat('mean_variance_'+feature_type+'.mat', info, appendmat=False)
+    
+    
+    
 #####################################################################
 
 if __name__ == '__main__':
     print "-----------------------------"
     print "Run test module of pilot_data"
     print "-----------------------------"
-    
-    #data_objects=['modeldaa','modelbbc','modelabe','modelbae','modelacc','modelbca']
+    dataset='generated'
+    #training_objects, validate_objects, test_objects = get_objects(dataset)
+    training_objects=['modeldaa','modelbbc','modelabe','modelbae','modelacc','modelbca']
+    #training_objects=['modeldaa']
+    #calculate_mean_variance(data_objects = training_objects,feature_type='both')
+    result_data, result_labels =prepare_data(training_objects, feature_type='both', dataset='generated', normalized=True)
+    #time.sleep(10)
+    print result_data.shape
+    print result_data
     #mylist=prepare_data_grouped(data_objects, feature_type='app', sample_step=8)
     #print type(mylist)
-    
-    dataset='generated'
-    training_objects, validate_objects, test_objects = get_objects(dataset)
-    testset = prepare_data_list(test_objects, feature_type='both')
-    validationset = prepare_data_list(validate_objects, feature_type='both')
-    trainingset = prepare_data_grouped(training_objects, feature_type='app', sample_step=16)
+
+    #training_objects, validate_objects, test_objects = get_objects(dataset)
+    #testset = prepare_data_list(test_objects, feature_type='both')
+    #validationset = prepare_data_list(validate_objects, feature_type='both')
+    #trainingset = prepare_data_grouped(training_objects, feature_type='app', sample_step=16)
     
     #print type(trainingset)
     

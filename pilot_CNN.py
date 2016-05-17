@@ -13,6 +13,7 @@ max_num_epochs = 5
 image_label_list = 'imglist_generated_tmp.txt'
 batch_size = 10
 data_type = 'both' #can be app, flow or both
+NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 150
 
 class DataError(Exception):
     def __init__(self, value):
@@ -31,10 +32,10 @@ class DataError(Exception):
 ### READ IN DATA    ###
 def read_my_file_format(filename_and_label_tensor, data_type='app'):
     """Consumes a single filename and label as a ' '-delimited string.
-
+    If you want N-way read parallellism, call this function N-times.
     Args:
         filename_and_label_tensor: A scalar string tensor.
-
+        data_type: appearance, flow or both
     Returns:
         An object representing a single data object with the following fields:
         height: number of rows in the result
@@ -62,15 +63,43 @@ def read_my_file_format(filename_and_label_tensor, data_type='app'):
         result.height = result.flow_image.get_shape()[0]
         result.width = result.flow_image.get_shape()[1]
     result.data_type = data_type
+
     return result
 
+
+def _generate_image_and_label_batch(image, label, min_queue_examples, batch_size):
+    """Construct a queued batch of images and labels.
+    Args:
+        image: 3-D Tensor of [height, width, 3] of type.float32.
+        label: 1-D Tensor of type.int32
+        min_queue_examples: int32, minimum number of samples to retain
+        in the queue that provides of batches of examples.
+        batch_size: Number of images per batch.
+    Returns:
+        images: Images. 4D tensor of [batch_size, height, width, 3] size.
+        labels: Labels. 1D tensor of [batch_size] size.
+    """
+    # Create a queue that shuffles the examples, and then
+    # read 'batch_size' images + labels from the example queue.
+    num_preprocess_threads = 16
+    images, label_batch = tf.train.shuffle_batch(
+        [image, label],
+        batch_size=batch_size,
+        num_threads=num_preprocess_threads,
+        capacity=min_queue_examples + 3 * batch_size,
+        min_after_dequeue=min_queue_examples)
+
+    return images, tf.reshape(label_batch, [batch_size])
+
+    
 def distorted_inputs(data_list, batch_size, data_type='app'):
     """
     Args:
-        data_dir: Path to the data list file.
+        data_list: Path to the data list file.
         batch_size: Number of images per batch.
+        data_type: appearance, flow or both
     Returns:
-        images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3] size.
+        images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, IMAGE_DEPTH] size.
         labels: Labels. 1D tensor of [batch_size] size.
     """
     #removing label, obtaining list containing /path/to/image_x
@@ -83,41 +112,61 @@ def distorted_inputs(data_list, batch_size, data_type='app'):
     
     #get a line of the input_queue and return a decoded object with image-field and label-field
     result = read_my_file_format(input_queue.dequeue(), data_type)
-    distorted_image = result.rgb_image
-    # randomize the order their operation.
+    # Randomly crop a [height, width] section of the image.
+    #==> ensure the size of the tensor needed by shuffle_batch
+    #PIL Image.show cannot handle data type float32
+    reshaped_image = tf.cast(result.rgb_image, tf.float32)
+    #reshaped_image = tf.transpose(reshaped_image, [1, 2, 0])
+    distorted_image = tf.random_crop(reshaped_image, [384, 512, 3])
+    
+    # randomize the order of the operations.
     distorted_image = tf.image.random_brightness(distorted_image,max_delta=63)
-    distorted_image = tf.image.random_contrast(distorted_image,                                       lower=0.2, upper=1.8)
+    distorted_image = tf.image.random_contrast(distorted_image,lower=0.2, upper=1.8)
+    
+    # Display the training images in the visualizer.
+    tf.image_summary('image', distorted_image)
 
     # Subtract off the mean and divide by the variance of the pixels.
-    distorted_image = tf.image.per_image_whitening(distorted_image)
-
-  
-    return result
-
+    whitened_image = tf.image.per_image_whitening(distorted_image)
+    
+    # Ensure that the random shuffling has good mixing properties.
+    min_fraction_of_examples_in_queue = 0.4
+    min_queue_examples = int(NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN *
+                            min_fraction_of_examples_in_queue)
+    print ('Filling queue with %d images before starting to train. '
+         'This will take a few minutes.' % min_queue_examples)
+    
+    return _generate_image_and_label_batch(whitened_image, result.label, min_queue_examples, batch_size)
+    #return float_image
 
 ### SCRIPT ###
-result = distorted_inputs(image_label_list, batch_size, data_type)
 
-init_op = tf.initialize_all_variables()
-with tf.Session() as sess:
-    sess.run(init_op)
-    #sess.as_default()
-    # get coordinator for arranging the different threads
-    coord = tf.train.Coordinator()
-    # start all queue runners in the graph and returns a list of threads
-    threads = tf.train.start_queue_runners(coord=coord)
-    print "number of threads ",len(threads)
-    
-    #im = sess.run(result.flow_image)
-    #Image.fromarray(np.asarray(im)).show()
-    for i in range(3): #length of your filename list
-        im_rgb, im_flow, lbl = sess.run([result.rgb_image, result.flow_image, result.label])
-        #import pdb; pdb.set_trace()
-        Image.fromarray(np.asarray(im_rgb)).show()
-        Image.fromarray(np.asarray(im_flow)).show()
-    #Image._show(Image.fromarray(np.asarray(im)), title="MYIMAGE")
-
-    #coordinator asks all threads to stop
-    coord.request_stop()
-    #wait till all threads are stopped
-    coord.join(threads)
+with tf.Graph().as_default():
+    #images, labels = distorted_inputs(image_label_list, batch_size, data_type)
+    images, labels = distorted_inputs(image_label_list, batch_size, data_type)
+    #viz_im = tf.cast(images[0], tf.uint8)
+    init_op = tf.initialize_all_variables()
+    with tf.Session() as sess:
+        sess.run(init_op)
+        #sess.as_default()
+        # get coordinator for arranging the different threads
+        coord = tf.train.Coordinator()
+        # start all queue runners in the graph and returns a list of threads
+        threads = tf.train.start_queue_runners(coord=coord)
+        print "number of threads ",len(threads)
+        
+        #im = sess.run(result.flow_image)
+        #Image.fromarray(np.asarray(im)).show()
+        #for i in range(1): #length of your filename list
+            #im_rgb = sess.run(viz_im)
+            #print type(im_rgb)
+            #print str(im_rgb.shape)
+            #Image.fromarray(np.asarray(im_rgb[0])).show()
+            #import pdb; pdb.set_trace()
+            #Image.fromarray(np.asarray(im_rgb[0])).show()
+            #Image.fromarray(np.asarray(im_flow)).show()
+        
+        #coordinator asks all threads to stop
+        coord.request_stop()
+        #wait till all threads are stopped
+        coord.join(threads)

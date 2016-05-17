@@ -54,7 +54,7 @@ class LSTMModel(object):
         # Build the LSTM Graph for testing
         with tf.variable_scope("LSTM"):
             with tf.device(device_name):
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=0.9) #init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer: f = f'(0) + f_b(0.9) ==> c = f * c_-1 
+                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=1.0) #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
                 if self.is_training and keep_prob < 1:
                     lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
@@ -67,16 +67,19 @@ class LSTMModel(object):
                 #unfolled a greater network over num_steps timesteps concatenating the output
                 outputs = []
                 state = self.initial_state
+                states = []
                 for time_step in range(self._num_steps):
                     if time_step > 0: tf.get_variable_scope().reuse_variables()
                     if time_step == 1: self._state = state # the next run will need the state after the first step to continue
                     (cell_output, state) = cell(self.inputs[:, time_step, :], state)
-                    # what is the size of this state?
+                    # what is the size of this state? [batchsize * layers * hidden_size *2 (for output and cell state)]
                     outputs.append(cell_output)
+                    states.append(state)
                 if self._num_steps == 1: self._state = state # if only 1 step is taken, the state is not saved yet.
                 # make it a nice tensor of shape [batch_size, num_steps*hidden_size]
                 # reshape so each row correspond to 1 output of hidden_size length
                 output = tf.reshape(tf.concat(1, outputs), [-1, hidden_size])
+                self._states = tf.concat(1,states)
                 #import pdb; pdb.set_trace()
             
             #collect the data
@@ -197,12 +200,11 @@ class LSTMModel(object):
         """ Specify which values are written down in the logfile and visualized on the tensorboard
         for the case the network is unrolled for just a number of steps (return the last values)
         """
-        list_of_tensors = [self.loss_val, 
-                            self.cell_output_hist, 
+        list_of_tensors = [ self.cell_output_hist, 
                             self.state_hist, 
                             self.w_hist,
                             self.b_hist, 
-                            self.logits_hist]+self.preds_val+self.targs_val
+                            self.logits_hist]+self.preds_val+self.targs_val #self.loss_val, 
         return tf.merge_summary(list_of_tensors)
     
     def merge_all(self):
@@ -255,6 +257,10 @@ class LSTMModel(object):
     @property
     def state(self):
         return self._state
+    
+    @property
+    def states(self):
+        return self._states
 
     @property
     def lr(self):
