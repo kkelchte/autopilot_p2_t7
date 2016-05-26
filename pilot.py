@@ -50,11 +50,11 @@ class LSTMModel(object):
         # Placeholder for input 
         with tf.device(device_name):
             self._inputs = tf.placeholder(tf.float32, [self.batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
-        print "inference: ", self.batch_size," ",hidden_size," ",keep_prob," ",num_layers," ",int(num_layers)
+        print "inference ",self.prefix,": batch ", self.batch_size," size ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",int(num_layers)
         # Build the LSTM Graph for testing
         with tf.variable_scope("LSTM"):
             with tf.device(device_name):
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=1.0) #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
+                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=0.9) #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
                 if self.is_training and keep_prob < 1:
                     lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))

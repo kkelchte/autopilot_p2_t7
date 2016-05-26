@@ -1,6 +1,8 @@
 #from __future__ import division
 import pilot_data
-import pilot as pilot
+import pilot
+import pilot_settings
+
 import random
 import time
 import scipy.io as sio
@@ -41,130 +43,74 @@ flags.DEFINE_integer(
     "Define the hidden_size for training.")
 flags.DEFINE_float(
     "keep_prob", "0",
-    "Define the hidden_size for training.")
+    "Define the keep probability for training.")
 flags.DEFINE_string(
     "optimizer", "",
     "Define the wanted optimizer for training.")
+flags.DEFINE_string(
+    "network", "",
+    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
+flags.DEFINE_string(
+    "feature_type", "",
+    "app or flow or both.")
 
 
-
-# the class with general empty class variables that are set by the code
-# and general parameters of which i'm not playing around with yet.
-class Configuration:
-    gpu= True
-    random_order=True
-    batch_size=1
-    prefix = ""
-    feature_dimension = -1
-    output_size = -1
-    number_of_samples = 500 
-    sample = 16 #the training data will be downsampled in time with i%sample==0
-    init_scale = 0.1
-    learning_rate = 0.01
-#    max_grad_norm = 5 #According to search space odyssey hurts clipping performance
-    num_layers = 2
-    num_steps = -1
-    hidden_size = 50 #dimensionality of cell state and output
-    max_epoch = 50 #100
-    max_max_epoch = 100
-    keep_prob = 1.0 #1.0 #dropout
-    lr_decay = 1 / 1.15
-    optimizer = 'Adam'
-    normalized = False
-    dataset = 'generated'
-    feature_type = 'both' #flow or app or both
-    training_objects = ['dumpster', 'box']
-    validate_objects = ['box']
-    test_objects = ['wooden_case']
-    
-
-class SmallConfig(Configuration):
-    """small config, for testing."""
-    sample = 20
-    num_layers = 2
-    hidden_size = 10 #dimensionality of cell state and output
-    max_epoch = 2
-    max_max_epoch = 10
-    training_objects = ['modeldaa']#,'modelcba','modelfee']
-    validate_objects = ['modeldaa']
-    test_objects = ['modelaaa']
-    feature_type = 'app' #flow or app or both
-    
-class GPUConfig(Configuration):
-    num_steps = -1
-    sample = 1
-    hidden_size = 1
-    max_epoch = 3
-    max_max_epoch = 6
-    feature_type='app'
-    training_objects = ['modeldde']#, 'modelffc']
-    validate_objects = ['modeldde']
-    test_objects = ['modeldde']
-    
-class MediumConfig(Configuration):
-    """small config, for testing."""
-    sample = 16
-    num_layers = 2
-    hidden_size = 10 #dimensionality of cell state and output
-    max_epoch = 50
-    max_max_epoch = 100
-    training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
-    validate_objects = ['modeldea','modelabe']
-    test_objects = ['modelaaa', 'modelccc']
-    feature_type = 'app' #flow or app or both
-        
-class BigConfig(Configuration):
-    """Big config, for real training.
-        List of objects is obtained from pilot_data
-    """
-    training_objects, validate_objects, test_objects = pilot_data.get_objects(Configuration.dataset)
     
 #def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
-def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100, matfile = ""):
-    # In one epoch, the model trains/validates/tests in different minibatch runs
-    # The size of the minibatch is defined by the num_steps the LSTM is unrolled in time
-    print "num_steps: ",num_steps
+def run_epoch_fully_unroll(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100, matfile = ""):
+    # run one time through the data given in a batch of all equal length.
+    # network is fully unrolled. Used during training
+    print "Fully unroll... "
     start_time = time.time()
     costs = 0.0
     iters = 0.0
     score = 0.0
     state = model.initial_state.eval()
+        
+    feed_dict = {model.inputs: data[:,:,:], 
+                    model.initial_state: state, 
+                    model.targets: targets[:,:,:]}
+    outputs, states, costs, _ = session.run([model.logits, model.states, model.cost, eval_op],feed_dict)
     #import pdb; pdb.set_trace()
-        
-    # In case you go through the data in one track
-    if num_steps == data.shape[1]:
-        feed_dict = {model.inputs: data[:,:,:], 
-                     model.initial_state: state, 
-                     model.targets: targets[:,:,:]}
-        outputs, states, costs, _ = session.run([model.logits, model.states, model.cost, eval_op],feed_dict)
-        #import pdb; pdb.set_trace()
-        trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
-        score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
-        total = data.shape[0]*num_steps
-        
-        #
-        # Keep track of cell states
-        if(writer != None) and (matfile != ""):
-            #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
-            d = {'states': states, 'targets':trgts}
-            sio.savemat(matfile,d, appendmat=True)
-        
-        #write the first steps away
-        for i in range(num_steps):
-            pred = np.argmax(outputs[i,:])
-            trgt = np.argmax(trgts[i,:])
-            if writer != None:
-                pred_op = tf.scalar_summary(model.prefix+"_predictions", pred)
-                trgt_op = tf.scalar_summary(model.prefix+"_targets", trgt)
-                summary_str = session.run(tf.merge_summary([pred_op, trgt_op]))
-                writer.add_summary(summary_str,i)
-            if verbose and (i % int(num_steps/15) == 0):
-                print("Frame: %d target: %d prediction: %d"%(i, trgt, pred))        
-        if verbose:
-            print "Accuracy: ",float(score/total), '. Fps:', total/(time.time() - start_time)
-        return score, costs, total
+    trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
+    score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
+    total = data.shape[0]*num_steps
     
-    #loop over frames in steps of size 1
+    # Keep track of cell states
+    if(writer != None) and (matfile != ""):
+        #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
+        d = {'states': states, 'targets':trgts}
+        sio.savemat(matfile,d, appendmat=True)
+    
+    #write the steps away: first movie in case of batch: output of different movies in batch is concatenated in time direction 
+    for i in range(num_steps):
+        pred = np.argmax(outputs[i,:])
+        trgt = np.argmax(trgts[i,:])
+        if writer != None:
+            pred_op = tf.scalar_summary(model.prefix+"_predictions", pred)
+            trgt_op = tf.scalar_summary(model.prefix+"_targets", trgt)
+            #cst_op = tf.scalar_summary()
+            summary_str = session.run(tf.merge_summary([pred_op, trgt_op]))
+            writer.add_summary(summary_str,i)
+        if verbose and (i % int(num_steps/15) == 0):
+            print("Frame: %d target: %d prediction: %d"%(i, trgt, pred))        
+    if verbose:
+        print "Accuracy: ",float(score/total), '. Fps:', total/(time.time() - start_time)
+    return score, costs, total
+    
+    
+def run_epoch_one_step(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100, matfile = ""):
+    # Validate / test one step at the time going through the data
+    # data is only 1 movie. Not a batch of different movies.
+    # this function can also be used when you want to unroll over a few time steps but not all
+    print "One step at the time... "
+    start_time = time.time()
+    costs = 0.0
+    iters = 0.0
+    score = 0.0
+    state = model.initial_state.eval()
+    
+    #In case you loop over frames in steps of size 1
     list_of_states = []
     for f in range(data.shape[1]-num_steps+1):
         feed_dict = {model.inputs: data[:,f:f+num_steps,:], 
@@ -200,6 +146,7 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
                     %(f, b, np.argmax(targets[b,f,:]), np.argmax(outputs[b*num_steps]),
                     iters * data.shape[0] / (time.time() - start_time)))    
         costs += current_loss
+    
     # Keep track of cell states
     if(writer != None) and (matfile != ""):
         #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
@@ -217,112 +164,46 @@ def run_epoch(session, model, data, targets, eval_op, num_steps=1, writer=None, 
     ##Add call for tensor accuracy + write it away
     return score, costs, iters
 
-def get_config():
-    if FLAGS.model == "big":
-        return BigConfig()
-    if FLAGS.model == "small":
-        return SmallConfig()
-    if FLAGS.model == "GPU":
-        return GPUConfig()
-    if FLAGS.model == "medium":
-        return MediumConfig()
-    else:
-        return Configuration()
 
-#def interpret_flags(FLAGS, config):
     
     
 
 def main(_):
     start_time = time.time()
     
-    # Get chosen configuration
-    config = get_config()
-    
-    # Specify the configurations for training/validation/testing
-    valid_config = get_config()
-    config.prefix = "training"
-    valid_config.prefix = "validation"
-    test_config = get_config()
-    test_config.prefix = "test"
+    # Get configuration adapted to the flags of user input
+    train_config, valid_config, test_config = pilot_settings.get_config(FLAGS)
     
     # Check if folder for logging is already used.
-    logfolder = FLAGS.log_directory+FLAGS.model
-    #import pdb; pdb.set_trace()
-    # Read the flags from the input
-    if FLAGS.learning_rate != 0: 
-        config.learning_rate = FLAGS.learning_rate
-        lr = 0
-        if FLAGS.learning_rate < 1:
-            lr = str(FLAGS.learning_rate)[2:]
-            lr = "0" + lr
-        else:
-            lr = str(FLAGS.learning_rate)
-            lr = lr[:lr.find('.')]
-        #import pdb; pdb.set_trace()
-        logfolder = logfolder + "_lr_"+ lr
-    if FLAGS.num_layers != 0:
-        config.num_layers = FLAGS.num_layers
-        valid_config.num_layers = FLAGS.num_layers
-        test_config.num_layers = FLAGS.num_layers
-        logfolder = logfolder + "_layers_"+ str(FLAGS.num_layers)
-    if FLAGS.hidden_size != 0: 
-        config.hidden_size = FLAGS.hidden_size
-        valid_config.hidden_size = FLAGS.hidden_size
-        test_config.hidden_size = FLAGS.hidden_size
-        logfolder = logfolder + "_size_"+ str(FLAGS.hidden_size)
-    if FLAGS.keep_prob != 0: 
-        config.keep_prob = FLAGS.keep_prob
-        kp = str(FLAGS.keep_prob)[2:]
-        kp = "0" + kp
-        logfolder = logfolder + "_drop_"+ str(kp)
-    if FLAGS.optimizer != "": 
-        config.optimizer = FLAGS.optimizer
-        logfolder = logfolder + "_opt_"+ str(FLAGS.optimizer)
-    if FLAGS.normalized != None: 
-        config.normalized = FLAGS.normalized
-        logfolder = logfolder + "_norm_"+ str(FLAGS.normalized)
-    if FLAGS.random_order != None: 
-        config.random_order = FLAGS.random_order
-        logfolder = logfolder + "_random_order_"+ str(FLAGS.random_order)
-    if FLAGS.log_tag != "": 
-        logfolder = logfolder + "_"+ str(FLAGS.log_tag)
-        
-    #delete logfolder if its already used otherwise it gets huge
+    logfolder = train_config.logfolder
+    
+    # Delete logfolder if its already used, otherwise it gets huge
     shutil.rmtree(logfolder,ignore_errors=True)
-    print 'make logfolder: ', logfolder
+    print 'Logfolder: ', logfolder
+    
     # Trainingdata is a list of tuples (data, labels), each tuple corresponds to one training group
     # data is an array of shape [batch_of_movies, movie_length, feature_dimension]
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
-    training_data_list = pilot_data.prepare_data_grouped(config.training_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
-    validate_data_list = pilot_data.prepare_data_list(config.validate_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
-    test_data_list = pilot_data.prepare_data_list(config.test_objects, config.sample, config.feature_type, config.dataset, normalized=config.normalized)
-    
-    #import pdb; pdb.set_trace()
+    training_data_list = pilot_data.prepare_data_grouped(train_config.training_objects, train_config)
+    validate_data_list = pilot_data.prepare_data_list(train_config.validate_objects, train_config)
+    test_data_list = pilot_data.prepare_data_list(train_config.test_objects, train_config)
     
     # Feature dimension from data
-    if config.feature_dimension == -1:
-        config.feature_dimension = training_data_list[0][0].shape[2]
+    if train_config.feature_dimension == -1:
+        train_config.feature_dimension = training_data_list[0][0].shape[2]
         valid_config.feature_dimension = training_data_list[0][0].shape[2]
         test_config.feature_dimension = training_data_list[0][0].shape[2]
-    if config.output_size == -1:
-        config.output_size = training_data_list[0][1].shape[2]
+    if train_config.output_size == -1:
+        train_config.output_size = training_data_list[0][1].shape[2]
         valid_config.output_size = training_data_list[0][1].shape[2]
         test_config.output_size = training_data_list[0][1].shape[2]
-    # Num_steps:
-    valid_config.num_steps = 1
-    test_config.num_steps = 1
+    
     # if number of steps is -1 it adapts to the length of 1 movie,
     # unrolling the network over the full length of the movie.
-    if config.num_steps == -1: config.num_steps = training_data_list[0][0].shape[1]
+    if train_config.num_steps == -1: train_config.num_steps = training_data_list[0][0].shape[1]
     
     # batch_size:
-    config.batch_size = training_data_list[0][0].shape[0]#take all movies in one batch
-    valid_config.batch_size = 1
-    test_config.batch_size = 1
-    # adapt test data and labels according to batchsize 1 ~ make 1 movie by concatenating the different testmovies
-    #test_data = np.reshape(test_data,(1, -1, test_data.shape[2]))      
-    #test_labels = np.reshape(test_labels,(1, -1, test_labels.shape[2]))
+    train_config.batch_size = training_data_list[0][0].shape[0]#take all movies in one batch
     
     
     # Tell TensorFlow that the model will be built into the default Graph.
@@ -332,27 +213,27 @@ def main(_):
         
         # Define initializer
         #with tf.device('/gpu:0'):
-        initializer = tf.random_uniform_initializer(-config.init_scale, config.init_scale)
+        initializer = tf.random_uniform_initializer(-train_config.init_scale, train_config.init_scale)
         #initializer = tf.constant_initializer(1.0)
             
         start_time = time.time()
         trainingmodels = []
         # Build the LSTM Graph with 1 model for training, validation and testing
         with tf.variable_scope("model", reuse=None, initializer=initializer):
-            mtrain = pilot.LSTMModel(is_training = True, config=config)
+            mtrain = pilot.LSTMModel(is_training = True, config=train_config)
             trainingmodels.append(mtrain)
         # Reuse the defined weights but initialize with random_uniform_initializer
         with tf.variable_scope("model", reuse=True): #, initializer=initializer): I dont think they should be randomly initialized if variables are reused anyway
             for training_tuple in training_data_list[1:]:
-                print 'make a new model'
-                config.batch_size = training_tuple[0].shape[0]
-                config.num_steps = training_tuple[0].shape[1]
-                mtrain = pilot.LSTMModel(is_training = True, config=config)
+                print 'make a new model for other training batch'
+                train_config.batch_size = training_tuple[0].shape[0]
+                train_config.num_steps = training_tuple[0].shape[1]
+                mtrain = pilot.LSTMModel(is_training = True, config=train_config)
                 trainingmodels.append(mtrain)       
             mvalid = pilot.LSTMModel(is_training=False, config=valid_config)
             mtest = pilot.LSTMModel(is_training=False, config=test_config)
-        print "Time for loading models: ", (time.time()-start_time)  
-        print "Number of models: ", (len(trainingmodels)+2)
+            print "Time for loading models: ", (time.time()-start_time)  
+            print "Number of models: ", (len(trainingmodels)+2)
         
         # create some tensor op for calculating and keeping the accuracy over different epochs
         accuracy = tf.placeholder(tf.float32, name="accuracy")
@@ -366,7 +247,7 @@ def main(_):
             per_sum = tf.scalar_summary("validation_perplexity", perplexity)
             merge_v = tf.merge_summary([acc_sum, per_sum])
         location = logfolder+"/overview"
-        writer_overview= tf.train.SummaryWriter(location, session.graph_def)    
+        writer_overview= tf.train.SummaryWriter(location, graph=session.graph)    
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         
@@ -377,11 +258,11 @@ def main(_):
         #import pdb; pdb.set_trace()
         current_epoch = 0
         #Train while model gets better with upperbound max_max_epoch as number of runs
-        for i in range(config.max_max_epoch+1):
+        for i in range(train_config.max_max_epoch+1):
             #every 1/5/10/50/100/500/1000 epochs it should write the current data away
             writer = None
             # write different epochs away as different logs in a logarithmic range till max_max_epoch
-            if i in (b*10**exp for exp in range(1+int(math.log(config.max_max_epoch,10))) for b in [1,5]):
+            if i in (b*10**exp for exp in range(1+int(math.log(train_config.max_max_epoch,10))) for b in [1,5]):
                 if i!= 1:
                     #delete logdata of previous run except for the first run
                     location = logfolder+"/e"+str(current_epoch)
@@ -389,11 +270,11 @@ def main(_):
                 current_epoch = i
                 #print "save epoch: ", i+1
                 location = logfolder+"/e"+str(i)
-                writer = tf.train.SummaryWriter(location, session.graph_def)
+                writer = tf.train.SummaryWriter(location, graph=session.graph)
         
             ### learning rate goes down during learning
-            lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
-            mtrain.assign_lr(session, config.learning_rate * lr_decay)
+            lr_decay = train_config.lr_decay ** max(i - train_config.max_epoch, 0.0)
+            mtrain.assign_lr(session, train_config.learning_rate * lr_decay)
             print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mtrain.lr)))
             
             ### Train the model
@@ -401,11 +282,11 @@ def main(_):
             per = 0.0
             chosen_model = int(random.uniform(0,len(trainingmodels))) #choose 1 model from which the first movie is recorded
             indices = range(len(trainingmodels))
-            if config.random_order: random.shuffle(indices)
+            if train_config.random_order: random.shuffle(indices)
             for j in indices:
                 if j == chosen_model : train_writer = writer
                 else : train_writer = None
-                results = run_epoch(session, trainingmodels[j], training_data_list[j][0], training_data_list[j][1], trainingmodels[j].train_op, num_steps = training_data_list[j][0].shape[1], writer = train_writer, verbose = False, matfile=logfolder+"/trainstates_"+str(i)+".mat")
+                results = run_epoch_fully_unroll(session, trainingmodels[j], training_data_list[j][0], training_data_list[j][1], trainingmodels[j].train_op, num_steps = training_data_list[j][0].shape[1], writer = train_writer, verbose = False, matfile=logfolder+"/trainstates_"+str(i)+".mat")
                 train_perplexity = np.exp(results[1] / results[2])
                 train_accuracy = results[0]/results[2]+0.000
                 print("Train Accuracy: %.3f" % ( train_accuracy))
@@ -422,13 +303,13 @@ def main(_):
             per = 0.0
             chosen_model = int(random.uniform(0,len(validate_data_list)))
             indices = range(len(validate_data_list))
-            if config.random_order : random.shuffle(indices)
+            if train_config.random_order : random.shuffle(indices)
             for j in indices:
                 # write away prediction results of last movie
                 if j == chosen_model : val_writer = writer
                 else : val_writer = None
                 #import pdb; pdb.set_trace()
-                results = run_epoch(session, mvalid, validate_data_list[j][0], validate_data_list[j][1], tf.no_op(), writer = val_writer, number_of_samples = valid_config.number_of_samples, verbose = False, matfile=logfolder+"/valstates_"+str(i)+".mat")
+                results = run_epoch_one_step(session, mvalid, validate_data_list[j][0], validate_data_list[j][1], tf.no_op(), writer = val_writer, number_of_samples = valid_config.number_of_samples, verbose = False, matfile=logfolder+"/valstates_"+str(i)+".mat")
                 valid_perplexity = np.exp(results[1] / results[2])
                 valid_accuracy = results[0]/results[2]
                 print("Valid Accuracy: %.3f" % (valid_accuracy))
@@ -441,42 +322,39 @@ def main(_):
         
         # Test the model
         location = logfolder+"/test"
-        writer = tf.train.SummaryWriter(location, session.graph_def)
+        writer = tf.train.SummaryWriter(location, graph=session.graph)
         for j in range(len(test_data_list)):
             # write away results of last movie
             if j == len(test_data_list)-1 : test_writer = writer
             else : test_writer = None
-            results = run_epoch(session, mtest, test_data_list[j][0], test_data_list[j][1], tf.no_op(), writer = test_writer, verbose=True, number_of_samples = test_config.number_of_samples)
+            results = run_epoch_one_step(session, mtest, test_data_list[j][0], test_data_list[j][1], tf.no_op(), writer = test_writer, verbose=True, number_of_samples = test_config.number_of_samples)
             test_perplexity = np.exp(results[1] / results[2])
             print("Test perplexity: %.3f" % test_perplexity)
         
         # Save the variables to disk.
         save_path = saver.save(session, logfolder+"/model.ckpt")
         print("Model saved in file: %s" % save_path)
-        
+    
+    # Give some nice feedback on how long it all took
     duration = (time.time()-start_time)
-    duration_message = "time: "
+    duration_message = ""
     if duration > 60:
-        duration_message = duration_message+str(int(duration%60))+"sec "
+        duration_message = duration_message+str(int(duration%60))+"sec."
         duration = int(duration/60) #number of minutes
         if duration > 60:
-            duration_message = duration_message+str(int(duration%60))+"min "
+            duration_message = str(int(duration%60))+"min "+duration_message
             duration = int(duration/60) #number of hours
             if duration > 24:
-                duration_message = duration_message+str(int(duration%60))+"hours "
+                duration_message = str(int(duration%60))+"hours "+duration_message
                 duration = int(duration/24) #number of days
-                duration_message = duration_message+str(duration)+"days."
+                duration_message = str(duration)+"days "+duration_message
             else:
-                duration_message = duration_message+str(duration)+"hours."
+                duration_message = str(duration)+"hours "+duration_message
         else:
-            duration_message = duration_message+str(duration)+"min."
+            duration_message = str(duration)+"min "+duration_message
     else:
-        duration_message = duration_message+str(duration)+"sec."
-                
-                
-    
-    
-    print "DONE: "+duration_message
+        duration_message = str(duration)+"sec. "
+    print "DONE time: "+duration_message
     
 if __name__ == '__main__':
     tf.app.run() 
