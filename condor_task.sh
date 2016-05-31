@@ -5,15 +5,15 @@
 TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
 model="$1"
-learning_rate="$2"
-hidden_size="$3"
+#learning_rate="$2"
+#hidden_size="$3"
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
-#random_order="$6"
-network="$4"
-feature_type="$5"
-#log_tag="$5" #give the job an extra tag to discriminate from other parallel jobs
+random_order="$2"
+network="$3"
+#feature_type="$5"
+#log_tag="$3" #give the job an extra tag to discriminate from other parallel jobs
 
 description=""
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
@@ -44,7 +44,7 @@ if [ ! -z $normalized ]; then
 fi
 if [ ! -z $random_order ]; then 
 	TASK="$TASK --random_order ${random_order}"
-	description="${description}_norm_$random_order"
+	description="${description}_rand_$random_order"
 fi
 if [ ! -z $network ]; then 
 	TASK="$TASK --network ${network}"

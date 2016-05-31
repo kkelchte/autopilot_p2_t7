@@ -2,6 +2,7 @@
 import pilot_data
 import pilot
 import pilot_settings
+import pilot_states
 
 import random
 import time
@@ -13,54 +14,18 @@ import numpy as np
 import math
 import shutil
 
-flags = tf.flags
 logging = tf.logging
-
-FLAGS = flags.FLAGS
-flags.DEFINE_boolean(
-    "normalized", None,
-    "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
-flags.DEFINE_boolean(
-    "random_order", None,
-    "Whether or not the batches during 1 epoch are shuffled in random order.")
-flags.DEFINE_string(
-    "model", "small",
-    "A type of model. Possible options are: small, medium, big and dumpster.")
-flags.DEFINE_string(
-    "log_directory", "/esat/qayd/kkelchte/tensorflow/lstm_logs/",
-    "this is the directory for log files that are visualized by tensorboard")
-flags.DEFINE_string(
-    "log_tag", "",
-    "an extra tag to give some information about the job")
-flags.DEFINE_float(
-    "learning_rate", "0",
-    "Define the learning rate for training.")
-flags.DEFINE_integer(
-    "num_layers", "0",
-    "Define the num_layers for training.")
-flags.DEFINE_integer(
-    "hidden_size", "0",
-    "Define the hidden_size for training.")
-flags.DEFINE_float(
-    "keep_prob", "0",
-    "Define the keep probability for training.")
-flags.DEFINE_string(
-    "optimizer", "",
-    "Define the wanted optimizer for training.")
-flags.DEFINE_string(
-    "network", "",
-    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
-flags.DEFINE_string(
-    "feature_type", "",
-    "app or flow or both.")
-
-
+FLAGS = tf.app.flags.FLAGS
     
 #def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
 def run_epoch_fully_unroll(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=100, matfile = ""):
+    """
+    Args:
+        targets: [batch, steps, 4]
+    """
     # run one time through the data given in a batch of all equal length.
     # network is fully unrolled. Used during training
-    print "Fully unroll... "
+    print "Fully unroll... over ", num_steps, " steps."
     start_time = time.time()
     costs = 0.0
     iters = 0.0
@@ -78,10 +43,17 @@ def run_epoch_fully_unroll(session, model, data, targets, eval_op, num_steps=1, 
     
     # Keep track of cell states
     if(writer != None) and (matfile != ""):
-        #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
+        #states = [batchsize, num_steps*hidden_size*num_layers*2 (~output;state)]
         d = {'states': states, 'targets':trgts}
         sio.savemat(matfile,d, appendmat=True)
-    
+    btime = time.time()
+    if(writer != None):
+        with tf.device('/cpu:0'):
+            state_images = pilot_states.get_image(states, targets, num_steps, model.hidden_size, model.num_layers, model.batch_size)
+            im_op = tf.image_summary('Innerstates', state_images, max_images=9)
+            summary_str = session.run(tf.merge_summary([im_op]))
+            writer.add_summary(summary_str)
+            print "state image: ", time.time() - btime, " sec"
     #write the steps away: first movie in case of batch: output of different movies in batch is concatenated in time direction 
     for i in range(num_steps):
         pred = np.argmax(outputs[i,:])
@@ -89,7 +61,6 @@ def run_epoch_fully_unroll(session, model, data, targets, eval_op, num_steps=1, 
         if writer != None:
             pred_op = tf.scalar_summary(model.prefix+"_predictions", pred)
             trgt_op = tf.scalar_summary(model.prefix+"_targets", trgt)
-            #cst_op = tf.scalar_summary()
             summary_str = session.run(tf.merge_summary([pred_op, trgt_op]))
             writer.add_summary(summary_str,i)
         if verbose and (i % int(num_steps/15) == 0):
@@ -172,7 +143,7 @@ def main(_):
     start_time = time.time()
     
     # Get configuration adapted to the flags of user input
-    train_config, valid_config, test_config = pilot_settings.get_config(FLAGS)
+    train_config, valid_config, test_config = pilot_settings.get_config()
     
     # Check if folder for logging is already used.
     logfolder = train_config.logfolder
@@ -181,10 +152,11 @@ def main(_):
     shutil.rmtree(logfolder,ignore_errors=True)
     print 'Logfolder: ', logfolder
     
-    # Trainingdata is a list of tuples (data, labels), each tuple corresponds to one training group
+    # List of sorted(already done in txt file) tuples (data, labels), each tuple corresponds to one training movie
     # data is an array of shape [batch_of_movies, movie_length, feature_dimension]
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
-    training_data_list = pilot_data.prepare_data_grouped(train_config.training_objects, train_config)
+    #training_data_list = pilot_data.prepare_data_grouped(train_config.training_objects, train_config)
+    training_data_list = pilot_data.prepare_data_list(train_config.training_objects, train_config)
     validate_data_list = pilot_data.prepare_data_list(train_config.validate_objects, train_config)
     test_data_list = pilot_data.prepare_data_list(train_config.test_objects, train_config)
     
@@ -203,7 +175,7 @@ def main(_):
     if train_config.num_steps == -1: train_config.num_steps = training_data_list[0][0].shape[1]
     
     # batch_size:
-    train_config.batch_size = training_data_list[0][0].shape[0]#take all movies in one batch
+    train_config.batch_size = training_data_list[0][0].shape[0]#take all movies of first group in one batch
     
     
     # Tell TensorFlow that the model will be built into the default Graph.
@@ -218,6 +190,10 @@ def main(_):
             
         start_time = time.time()
         trainingmodels = []
+        # Get a list of all batchsizes depending on the lengths of the movies:
+        #lengths = [ t[0].shape[1] for t in training_data_list ]
+        #b_sizes = np.
+        #print lengths
         # Build the LSTM Graph with 1 model for training, validation and testing
         with tf.variable_scope("model", reuse=None, initializer=initializer):
             mtrain = pilot.LSTMModel(is_training = True, config=train_config)
@@ -237,15 +213,21 @@ def main(_):
         
         # create some tensor op for calculating and keeping the accuracy over different epochs
         accuracy = tf.placeholder(tf.float32, name="accuracy")
+        accuracy_max = tf.placeholder(tf.float32, name="accuracy_max")
+        accuracy_min = tf.placeholder(tf.float32, name="accuracy_min")
         perplexity = tf.placeholder(tf.float32, name="perplexity")
         with tf.name_scope("training_overview"):
-            acc_sum = tf.scalar_summary("training_accuracy", accuracy)
+            acc_sum = tf.scalar_summary("training_accuracy_av", accuracy)
+            acc_max_sum = tf.scalar_summary("training_accuracy_max", accuracy_max)
+            acc_min_sum = tf.scalar_summary("training_accuracy_min", accuracy_min)
             per_sum = tf.scalar_summary("training_perplexity", perplexity)
-            merge_t = tf.merge_summary([acc_sum, per_sum])
+            merge_t = tf.merge_summary([acc_sum, acc_max_sum, acc_min_sum, per_sum])
         with tf.name_scope("validation_overview"):
             acc_sum = tf.scalar_summary("validation_accuracy", accuracy)
+            acc_max_sum = tf.scalar_summary("training_accuracy_max", accuracy_max)
+            acc_min_sum = tf.scalar_summary("training_accuracy_min", accuracy_min)
             per_sum = tf.scalar_summary("validation_perplexity", perplexity)
-            merge_v = tf.merge_summary([acc_sum, per_sum])
+            merge_v = tf.merge_summary([acc_sum, acc_max_sum, acc_min_sum, per_sum])
         location = logfolder+"/overview"
         writer_overview= tf.train.SummaryWriter(location, graph=session.graph)    
         # Add ops to save and restore all the variables.
@@ -263,10 +245,10 @@ def main(_):
             writer = None
             # write different epochs away as different logs in a logarithmic range till max_max_epoch
             if i in (b*10**exp for exp in range(1+int(math.log(train_config.max_max_epoch,10))) for b in [1,5]):
-                if i!= 1:
-                    #delete logdata of previous run except for the first run
-                    location = logfolder+"/e"+str(current_epoch)
-                    shutil.rmtree(location,ignore_errors=True) #it might delete the wrong folder...		
+                #if i!= 1:
+                    ##delete logdata of previous run except for the first run
+                    #location = logfolder+"/e"+str(current_epoch)
+                    #shutil.rmtree(location,ignore_errors=True) #it might delete the wrong folder...		
                 current_epoch = i
                 #print "save epoch: ", i+1
                 location = logfolder+"/e"+str(i)
@@ -279,7 +261,11 @@ def main(_):
             
             ### Train the model
             acc = 0.0
+            acc_max = 0.0
+            acc_min = 1.0
             per = 0.0
+            winner_index = -1
+            lozer_index = -1
             chosen_model = int(random.uniform(0,len(trainingmodels))) #choose 1 model from which the first movie is recorded
             indices = range(len(trainingmodels))
             if train_config.random_order: random.shuffle(indices)
@@ -290,16 +276,24 @@ def main(_):
                 train_perplexity = np.exp(results[1] / results[2])
                 train_accuracy = results[0]/results[2]+0.000
                 print("Train Accuracy: %.3f" % ( train_accuracy))
+                if acc_max < train_accuracy: 
+                    acc_max = train_accuracy
+                    winner_index = j
+                if acc_min > train_accuracy: 
+                    acc_min = train_accuracy
+                    lozer_index = j
                 acc = acc+train_accuracy/len(trainingmodels)
                 per = per+train_perplexity/len(trainingmodels)
             # write away results of last movie
             if(writer_overview != None): 
-                summary_str= session.run(merge_t,{accuracy : acc, perplexity: per})
+                summary_str= session.run(merge_t,{accuracy : acc, perplexity: per, accuracy_max: acc_max, accuracy_min: acc_min})
                 writer_overview.add_summary(summary_str, i)
-                print("Epoch: %d Final Train Accuracy: %.3f" % (i + 1, acc))
+                print("Epoch: %d Final Train Accuracy: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (i + 1, acc, acc_max, winner_index, acc_min, lozer_index))
                 
             #### Validate the model
             acc = 0.0
+            acc_max = 0.0
+            acc_min = 1.0
             per = 0.0
             chosen_model = int(random.uniform(0,len(validate_data_list)))
             indices = range(len(validate_data_list))
@@ -313,12 +307,14 @@ def main(_):
                 valid_perplexity = np.exp(results[1] / results[2])
                 valid_accuracy = results[0]/results[2]
                 print("Valid Accuracy: %.3f" % (valid_accuracy))
+                if acc_max < valid_accuracy: acc_max = valid_accuracy
+                if acc_min > valid_accuracy: acc_min = valid_accuracy
                 acc = acc+valid_accuracy/len(validate_data_list)
                 per = per+valid_perplexity/len(validate_data_list)
             if(writer_overview != None): 
-                summary_str= session.run(merge_v,{accuracy : acc, perplexity: per})
+                summary_str= session.run(merge_v,{accuracy : acc, perplexity: per, accuracy_max: acc_max, accuracy_min: acc_min})
                 writer_overview.add_summary(summary_str, i)
-                print("Epoch: %d Final Valid Accuracy: %.3f" % (i + 1, acc))
+                print("Epoch: %d Final Valid Accuracy: %.3f, Max: %.3f, Min: %.3f." % (i + 1, acc, acc_max, acc_min))
         
         # Test the model
         location = logfolder+"/test"

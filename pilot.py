@@ -17,8 +17,8 @@ class LSTMModel(object):
         self._num_steps = config.num_steps
         self._is_training = is_training
         self._prefix = config.prefix
-        
-            
+        self._hidden_size = config.hidden_size
+        self._num_layers = config.num_layers    
         # Build LSTM graph
         self._logits = self.inference(config.num_layers, config.hidden_size, config.output_size,
                                     config.feature_dimension, config.keep_prob, config.gpu)
@@ -71,7 +71,7 @@ class LSTMModel(object):
                 for time_step in range(self._num_steps):
                     if time_step > 0: tf.get_variable_scope().reuse_variables()
                     if time_step == 1: self._state = state # the next run will need the state after the first step to continue
-                    (cell_output, state) = cell(self.inputs[:, time_step, :], state)
+                    (cell_output, state) = cell(self._inputs[:, time_step, :], state)
                     # what is the size of this state? [batchsize * layers * hidden_size *2 (for output and cell state)]
                     outputs.append(cell_output)
                     states.append(state)
@@ -223,7 +223,15 @@ class LSTMModel(object):
     @property
     def prefix(self):
         return self._prefix
-
+    
+    @property
+    def hidden_size(self):
+        return self._hidden_size
+    
+    @property
+    def num_layers(self):
+        return self._num_layers
+    
     @property
     def is_training(self):
         return self._is_training

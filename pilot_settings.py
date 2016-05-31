@@ -8,8 +8,48 @@ import pilot_settings
 
 import tensorflow as tf
 
+
+FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_boolean(
+    "normalized", None,
+    "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
+tf.app.flags.DEFINE_boolean(
+    "random_order", None,
+    "Whether or not the batches during 1 epoch are shuffled in random order.")
+tf.app.flags.DEFINE_string(
+    "model", "small",
+    "A type of model. Possible options are: small, medium, big and dumpster.")
+tf.app.flags.DEFINE_string(
+    "log_directory", "/esat/qayd/kkelchte/tensorflow/lstm_logs/",
+    "this is the directory for log files that are visualized by tensorboard")
+tf.app.flags.DEFINE_string(
+    "log_tag", "",
+    "an extra tag to give some information about the job")
+tf.app.flags.DEFINE_float(
+    "learning_rate", "0",
+    "Define the learning rate for training.")
+tf.app.flags.DEFINE_integer(
+    "num_layers", "0",
+    "Define the num_layers for training.")
+tf.app.flags.DEFINE_integer(
+    "hidden_size", "0",
+    "Define the hidden_size for training.")
+tf.app.flags.DEFINE_float(
+    "keep_prob", "0",
+    "Define the keep probability for training.")
+tf.app.flags.DEFINE_string(
+    "optimizer", "",
+    "Define the wanted optimizer for training.")
+tf.app.flags.DEFINE_string(
+    "network", "",
+    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
+tf.app.flags.DEFINE_string(
+    "feature_type", "",
+    "app or flow or both.")
+
 # the class with general empty class variables that are set by the code
-# and general parameters of which i'm not playing around with yet.
+# and DEFAULT parameters of which i'm not playing around with yet.
 class Configuration:
     network = 'pcnn'
     gpu= True
@@ -21,7 +61,7 @@ class Configuration:
     number_of_samples = 500 
     sample = 16 #the training data will be downsampled in time with i%sample==0
     init_scale = 0.1
-    learning_rate = 0.01
+    learning_rate = 0.001
 #   max_grad_norm = 5 #According to search space odyssey hurts clipping performance
     num_layers = 2
     num_steps = -1
@@ -39,7 +79,7 @@ class Configuration:
     test_objects = ['wooden_case']
     logfolder = "/esat/qayd/kkelchte/tensorflow/lstm_logs/"
 
-    def interpret_flags(self, FLAGS):
+    def interpret_flags(self):
         """
         Read in the settings from FLAGS and fill in the configuration accordingly
         """
@@ -89,11 +129,11 @@ class SmallConfig(Configuration):
     """small config, for testing."""
     network='inception'
     sample = 20
-    num_layers = 2
+    num_layers = 1
     hidden_size = 10 #dimensionality of cell state and output
     max_epoch = 2
     max_max_epoch = 10
-    training_objects = ['modelaaa']#,'modelcba','modelfee']
+    training_objects = ['modelaaa','modelcba','modelfee']
     validate_objects = ['modelaaa']
     test_objects = ['modelaaa']
     feature_type = 'both' #flow or app or both
@@ -116,7 +156,7 @@ class BigConfig(Configuration):
     """
     training_objects, validate_objects, test_objects = pilot_data.get_objects(Configuration.dataset)
 
-def get_config(FLAGS):
+def get_config():
     """deduce the configuration for training, validation and testing according to the flags set by the user
     Args:
         FLAGS: set by the user when calling python pilot_train.py --flag_1 value_1
@@ -149,9 +189,9 @@ def get_config(FLAGS):
     test_config.prefix = "test"
     
     # Interpret FLAGS for each configuration
-    train_config.interpret_flags(FLAGS)
-    valid_config.interpret_flags(FLAGS)
-    test_config.interpret_flags(FLAGS)
+    train_config.interpret_flags()
+    valid_config.interpret_flags()
+    test_config.interpret_flags()
     
     # Num_steps:
     valid_config.num_steps = 1
