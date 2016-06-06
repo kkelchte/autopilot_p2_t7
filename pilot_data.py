@@ -12,6 +12,23 @@ from os import listdir
 from os.path import isfile,join
 import time
 
+FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_boolean(
+    "normalized", False,
+    "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
+tf.app.flags.DEFINE_string(
+    "network", "pcnn",
+    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
+tf.app.flags.DEFINE_string(
+    "feature_type", "app",
+    "app or flow or both.")
+tf.app.flags.DEFINE_string(
+    "dataset", "generated",
+    "pick the dataset in /esat/qayd/kkelchte/simulation from which your movies can be found. Options: data or generated.")
+tf.app.flags.DEFINE_integer(
+    "sample", "16",
+    "Choose the amount the movies are subsampled. 16 is necessary to fit on a 2Gb GPU for both pcnn features.")
 
 class DataError(Exception):
     def __init__(self, value):
@@ -69,7 +86,7 @@ def one_hot_labels(labels):
         oh_labels[i,int(labels[i])]=1
     return oh_labels
 
-def prepare_data(data_objects, config):
+def prepare_data(data_objects):
     """
     Create batches for the listed data objects by obtaining the features and the labels.
     Creating different batches of the same size
@@ -78,7 +95,7 @@ def prepare_data(data_objects, config):
     returns a 3D array with first dimension the index of the movie, [movie, frame, feature]
     Args:
         data_object: list of objects like modelaaa or dumpster found in the dataset
-        config: configuration for picking the data
+        FLAGS
             sample_step: the amount the movies are subsampled
             feature_type: app ~ appearance, flow ~ optical flow
             dataset: the directory in the 'qayd/kkelchte/simulation/' path where the objects are found
@@ -90,35 +107,30 @@ def prepare_data(data_objects, config):
     data = []
     labels = []
     min_steps = 100000
-    if config.feature_type == 'both':
+    if FLAGS.feature_type == 'both':
         feature_types = ['app', 'flow']
     else:
-        feature_types = [config.feature_type]
+        feature_types = [FLAGS.feature_type]
     
     for data_object in data_objects:
-        directory = '/esat/qayd/kkelchte/simulation/'+config.dataset+'/'+data_object+'_one_cw'
+        directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object+'_one_cw'
         labels_obj = one_hot_labels(get_labels(directory))
         
         minfeat = labels_obj.shape[0]# see that labels, app and flow features are from the same number of frames
         feats_obj = []        
         for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
-            if config.network == 'pcnn': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw.mat', config.network)
-            elif config.network == 'inception' or config.network == 'logits' or config.network == 'logits_noisy': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw_'+config.network+'.mat', config.network)
-            else: raise DataError("network not known: ", config.network)
+            if FLAGS.network == 'pcnn': 
+                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw.mat', FLAGS.network)
+            elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy': 
+                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw_'+FLAGS.network+'.mat', FLAGS.network)
+            else: raise DataError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
-            #todo check and adapt if app and flow features dont have the same number of frames
-            #if minfeat > feats.shape[0]:
-            #    minfeat = feats.shape[0]
+        #flow is on 2RBG images ==> skip first label to be equal
         if 'flow' in feature_types:
-            labels_obj = labels_obj[0:-1]
+            labels_obj = labels_obj[1:]
         if len(feature_types) == 2:
-            feats_obj[0] = feats_obj[0][0:-1] #shorten app list
+            feats_obj[0] = feats_obj[0][0:-1] #shorten app list to be equal to flow list
             
-        #check here number of frames between app - flow - labels that you take minimum
-        #for ftype in feature_types:
-        #    if feats_obj[ftype].shape[0] != minfeat: feats_obj[ftype]=feats_obj[ftype][]
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
         #print "shape features:",feats_obj.shape
         
@@ -131,25 +143,27 @@ def prepare_data(data_objects, config):
             min_steps = labels_obj.shape[0]   
 
     #import pdb; pdb.set_trace()
-    if config.sample>=min_steps:
-        raise DataError("downsampling is larger than total data set "+str(config.sample)+">="+str(min_steps))
+    if FLAGS.sample>=min_steps:
+        raise DataError("downsampling is larger than total data set "+str(FLAGS.sample)+">="+str(min_steps))
         
     # resize according to num_steps of shortest video
     # and downsample in time to get a frame every 10 or 100 frames
-    ds_data = np.zeros((len(data),int(min_steps/config.sample)+1,data[0].shape[1]))
-    ds_labels = np.zeros((len(data), int(min_steps/config.sample)+1, labels[0].shape[1]))
+    ds_data = np.zeros((len(data),int(min_steps/FLAGS.sample)+1,data[0].shape[1]))
+    ds_labels = np.zeros((len(data), int(min_steps/FLAGS.sample)+1, labels[0].shape[1]))
     
+    #loop over batches (in this implementation is this always 1 batch)
     for b in range(len(data)):
         j=0
         for i in range(min_steps):
-            if (i%config.sample) == 0:
+            if (i%FLAGS.sample) == 0:
                 ds_data[b,j]= data[b][i]
                 ds_labels[b,j]=labels[b][i]
                 j=j+1
+    
     #Normalize the subsampled features if necessary
-    if config.normalized:
+    if FLAGS.normalized:
         norm_data = np.zeros(ds_data.shape)
-        data = sio.loadmat('mean_variance_'+config.feature_type+"_"+config.network+'.mat')
+        data = sio.loadmat('mean_variance_'+FLAGS.feature_type+"_"+FLAGS.network+'.mat')
         mean = data['mean']
         variance = data['variance']
         epsilon = 0.001
@@ -162,26 +176,26 @@ def prepare_data(data_objects, config):
 
     #return data, labels
 
-def prepare_data_list(data_objects, config):
+def prepare_data_list(data_objects):
     """
-    Returns a list of tuples containing an array of features and an array of labels for each data object.
-    Mainly used for validation and test set as there is no unrolled network, so the sizes dont have to be grouped.
-    Used by prepare_data_grouped for reading in all data
+    Returns a list of tuples contains (features, labels)_movie. Batchsize of features and labels = 1.
+    features and labels have size [batchsize, numberframes, feature/label dimension]
     """
     object_list = []
     for d_object in data_objects:
         print "object: ",d_object
-        object_data, object_labels = prepare_data([d_object], config)
+        object_data, object_labels = prepare_data([d_object])
         object_tuple = (object_data, object_labels)
         object_list.append(object_tuple)
     return object_list
 
-def prepare_data_grouped(data_objects, config):
+def prepare_data_grouped(data_objects):
     """
-    Create a list of tuples. Each tuple contains a data and label. 
+    Create a list of tuples. Each tuple contains a data and label. The batchsizes are grouped in the movies
+    with equal length. [batchsize, numberframes, feature/label dimension]
     """
     #list and sort the data according to the length
-    all_data = prepare_data_list(data_objects, config)
+    all_data = prepare_data_list(data_objects)
     
     #sort data
     sizes = [tu[0].shape[1] for tu in all_data]
@@ -201,7 +215,7 @@ def prepare_data_grouped(data_objects, config):
     differences = np.array(differences, dtype=dtype)
     differences = np.sort(differences, order='difference')
     #print differences
-    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(50/config.sample)]
+    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(50/FLAGS.sample)]
     #print split_indices
     
     # create a list of groups (lists) of movies which length  differs more than 50 frames
@@ -256,10 +270,10 @@ def prepare_data_grouped(data_objects, config):
         batch_list.append((batch_data, batch_labels))
     return batch_list
 
-def get_objects(dataset):
+def get_objects():
     # given a dataset read out the train, validate and test_set.txt lists
     # return 3 lists of objects
-    directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'
+    directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'
     # read training objects from train_set.txt
     training_objects = get_list(directory,'train_set.txt')
     # read validate objects from validat_set.txt
@@ -279,78 +293,7 @@ def get_list(directory,filename):
     list_o = [l[len(directory):] for l in list_o]
     return list_o
 
-def calculate_mean_variance(data_objects, dataset = 'generated',feature_type='both', network='pcnn'):
-    """
-    go through all data_objects and calculate the mean and variance.
-    Args:
-        data_objects: list of objects in dataset
-        dateset: the folder in qayd/kkelchte/simulation where the objects can be found
-        feature_type: appearance app, flow or both correspond for the .mat files
-    Result:
-        mat file in in current folder with 'mean' and 'variance' values saved
-    """
-    #Define number of total frames in data_objects
-    #total = 0
-    #for data_object in data_objects:
-    #    directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
-    #    for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
-    #        total = total + extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw.mat').shape[0]
-    #print 'Total: ', total
-    # calculate the mean of all feature vectors over all data objects
-    if feature_type == 'both':
-        feature_types = ['app', 'flow']
-    else:
-        feature_types = [feature_type]
-    means = []
-    nums  = []
-    for ftype in range(len(feature_types)): #loop over feature types 'app' and 'flow' or one of them
-        if network == 'pcnn': mean = np.zeros(4096, dtype=np.float64)
-        elif network == 'inception': mean = np.zeros(2048, dtype=np.float64)
-        num = 0 #keep track of number of features
-        for data_object in data_objects:
-            directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
-            if network == 'pcnn': feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw.mat', network)
-            elif network == 'inception': feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw_inception.mat', network)
-                        
-            #print 'feats: ',feats[0]
-            mean = mean + feats.sum(axis=0)
-            num = num + feats.shape[0]
-        mean = mean / num
-        means.append(mean)
-        nums.append(num)
-        print 'mean: ', mean
-    # calculate the variance of all feature vectors over all data objects
-    variances = []
-    for ftype in range(len(feature_types)): #loop over feature types 'app' and 'flow' or one of them
-        if network == 'pcnn': variance = np.zeros(4096, dtype=np.float64)
-        elif network == 'inception': variance = np.zeros(2048, dtype=np.float64)
-        for data_object in data_objects:
-            directory = '/esat/qayd/kkelchte/simulation/'+dataset+'/'+data_object+'_one_cw'
-            if network == 'pcnn':
-                feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw.mat', network)
-                diff = np.zeros(4096, dtype=np.float64)
-            elif network == 'inception':
-                feats = extract_features(directory+'/cnn_features/'+feature_types[ftype]+'_'+data_object+'_one_cw_inception.mat', network)
-                diff = np.zeros(2048, dtype=np.float64)
-            for feat in feats:
-                diff = diff + (feat - mean)**2
-            variance = variance + diff/nums[ftype]
-            
-        variances.append(variance)
-        print 'variance: ', variance
-    b_mean = np.concatenate(means)
-    #import pdb; pdb.set_trace()
-    b_variance = np.concatenate(variances)
-    info = {"mean":b_mean, "variance":b_variance}
-    sio.savemat('mean_variance_'+feature_type+"_"+network+'.mat', info, appendmat=False)
-    #appearance
-    info = {"mean":means[0], "variance":variances[0]}
-    sio.savemat('mean_variance_app_'+network+'.mat', info, appendmat=False)
-    #flow
-    info = {"mean":means[1], "variance":variances[1]}
-    sio.savemat('mean_variance_flow_'+network+'.mat', info, appendmat=False)
-    
-    
+
     
 #####################################################################
 
@@ -358,8 +301,7 @@ if __name__ == '__main__':
     print "-----------------------------"
     print "Run test module of pilot_data"
     print "-----------------------------"
-    dataset='generated'
-    training_objects, validate_objects, test_objects = get_objects(dataset)
+    training_objects, validate_objects, test_objects = get_objects()
     #training_objects=['modeldaa','modelbbc','modelabe','modelbae','modelacc','modelbca']
     #training_objects=['modeldaa']
     #calculate_mean_variance(data_objects = training_objects,feature_type='both', network='inception')

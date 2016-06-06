@@ -5,15 +5,15 @@
 TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
 model="$1"
-#learning_rate="$2"
-#hidden_size="$3"
+learning_rate="$2"
+#hidden_size="$2"
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
-random_order="$2"
-network="$3"
-#feature_type="$5"
-#log_tag="$3" #give the job an extra tag to discriminate from other parallel jobs
+#random_order="$2"
+#network="$2"
+#feature_type="$3"
+#log_tag="$4" #give the job an extra tag to discriminate from other parallel jobs
 
 description=""
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
@@ -79,18 +79,20 @@ echo "Universe         = vanilla" > $condor_file
 echo "">> $condor_file
 echo "RequestCpus      = 1" >> $condor_file
 echo "Request_GPUs	= 1" >> $condor_file
-echo "RequestMemory    = 15G" >> $condor_file
+echo "RequestMemory    = 16G" >> $condor_file
 #echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
 echo "+RequestWalltime = 360000" >> $condor_file
 #echo "+RequestWalltime = 10800" >> $condor_file
 echo "">> $condor_file
-#echo "Requirements = (machineowner == Visics)" >> $condor_file
-echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
+echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\")">> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb > 1900) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' ) && (machineowner == Visics)" >> $condor_file
 #echo "Requirements = ((machine == "vega.esat.kuleuven.be") || (machine == "wasat.esat.kuleuven.be") || (machine == "yildun.esat.kuleuven.be"))" >> $condor_file
+
 echo "Niceuser = true" >> $condor_file
+
 echo "Initialdir   =$temp_dir" >> $condor_file
 echo "Executable   = $shell_file" >> $condor_file
 echo "Log 	   = $condor_output_dir/condor${description}.log" >> $condor_file
@@ -111,7 +113,7 @@ echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-7.5/lib64:/users/v
 echo "# run virtual environment for tensorflow">>$shell_file
 echo "source /users/visics/kkelchte/tensorflow/bin/activate">>$shell_file
 echo "# set python library path">>$shell_file
-echo "export PYTHONPATH=/users/visics/kkelchte/tensorflow/lib/python2.7/site-packages">>$shell_file
+echo "export PYTHONPATH=/users/visics/kkelchte/tensorflow/lib/python2.7/site-packages:/users/visics/kkelchte/tensorflow/examples">>$shell_file
 echo "cd /users/visics/kkelchte/tensorflow/examples/pilot">>$shell_file
 echo "echo 'went to directory ' $PWD">>$shell_file
 echo "python $TASK">>$shell_file

@@ -4,6 +4,27 @@ import tensorflow as tf
 import numpy as np
 import math
 
+FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_string(
+    "optimizer", "Adam",
+    "Define the wanted optimizer for training.")
+tf.app.flags.DEFINE_integer(
+    "num_layers", "2",
+    "Define the num_layers of the model.")
+tf.app.flags.DEFINE_integer(
+    "hidden_size", "50",
+    "Define the hidden_size of the model.")
+tf.app.flags.DEFINE_float(
+    "keep_prob", "1.0",
+    "Define the keep probability for training.")
+tf.app.flags.DEFINE_float(
+    "forget_bias", "0.9",
+    "Reducing the forget bias makes the model remember longer.")
+tf.app.flags.DEFINE_boolean(
+    "gpu", True,
+    "Define whether you want to work with GPU or not.")
+
 class ModelError(Exception):
     def __init__(self, value):
         self.value = value
@@ -12,26 +33,32 @@ class ModelError(Exception):
 
 class LSTMModel(object):
 
-    def __init__(self, is_training, config):
-        self._batch_size = batch_size = config.batch_size
-        self._num_steps = config.num_steps
-        self._is_training = is_training
-        self._prefix = config.prefix
-        self._hidden_size = config.hidden_size
-        self._num_layers = config.num_layers    
+    def __init__(self, is_training, output_size, feature_dimension, batch_size=1, num_steps=1, prefix=''):
+        '''initialize the model
+        Args:
+            is_training = boolean that adds optimizer operation
+            output_size, feature_dimension, batch_size, num_steps = defines what kind of input the model can get_variable
+            prefix = train/validate/test
+        '''
+        self._is_training=is_training
+        # Define in what type input data arrives
+        self._batch_size = batch_size
+        self._num_steps = num_steps
+        self._prefix = prefix
+        
+        # Define model
+        self._hidden_size = FLAGS.hidden_size
+        self._num_layers = FLAGS.num_layers
+        
         # Build LSTM graph
-        self._logits = self.inference(config.num_layers, config.hidden_size, config.output_size,
-                                    config.feature_dimension, config.keep_prob, config.gpu)
-        self._cost = self.loss(config.output_size, config.gpu)
+        self._logits = self.inference(FLAGS.num_layers, FLAGS.hidden_size, output_size, feature_dimension, FLAGS.keep_prob, FLAGS.gpu)
+        self._cost = self.loss(output_size, FLAGS.gpu)
         
         if self._is_training:
-            self.training(optimizer_type=config.optimizer)
-        
-        
-        #learning_rate_summary = tf.scalar_summary("learning rate", self.lr)
+            self.training(optimizer_type=FLAGS.optimizer)
     
     
-    def inference(self, num_layers, hidden_size, output_size, feature_dimension, keep_prob, gpu=True):
+    def inference(self, num_layers, hidden_size, output_size, feature_dimension, keep_prob=1.0, gpu=True):
         """Build the LSTM model up to where it may be used for inference.
 
         Args:
@@ -49,17 +76,18 @@ class LSTMModel(object):
             device_name='/gpu:0'
         # Placeholder for input 
         with tf.device(device_name):
-            self._inputs = tf.placeholder(tf.float32, [self.batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
-        print "inference ",self.prefix,": batch ", self.batch_size," size ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",int(num_layers)
-        # Build the LSTM Graph for testing
+            self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
+        print "inference ",self.prefix,": batch ", self._batch_size," size ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
         with tf.variable_scope("LSTM"):
             with tf.device(device_name):
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=0.9) #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting ==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
+                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=FLAGS.forget_bias) 
+                #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting 
+                #==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
                 if self.is_training and keep_prob < 1:
                     lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
-                #import pdb; pdb.set_trace()
-                self._initial_state = cell.zero_state(self.batch_size, tf.float32)
+                #[batch_size, 1] with value 0
+                self._initial_state = cell.zero_state(self._batch_size, tf.float32)
                 
                 if self.is_training and keep_prob < 1:
                     self._inputs = tf.nn.dropout(self.inputs, keep_prob)
@@ -90,14 +118,8 @@ class LSTMModel(object):
         # Add a softmax layer mapping the output to 4 logits defining the network
         with tf.name_scope(self._prefix+'_softmax_linear'):
             with tf.device(device_name):
-                weights = tf.Variable(
-                    tf.truncated_normal([hidden_size, output_size],
-                                        stddev=1.0 / math.sqrt(float(hidden_size))),
-                    name='weights')
-                #weights = tf.Variable(tf.constant(0.1,shape=[hidden_size, output_size]),
-                #                      "weights")
-                biases = tf.Variable(tf.zeros([output_size]),
-                                    name='biases')
+                weights = tf.get_variable("weights",[hidden_size, output_size])        
+                biases = tf.get_variable('biases', [output_size])
                 # [?, output_size]=[?, hidden_size]*[hidden_size, output_size]
                 # with ? = num_steps * batch_size
                 logits = tf.matmul(output, weights) + biases
@@ -110,14 +132,9 @@ class LSTMModel(object):
             #write away the last prediction of a series of steps
             preds = tf.argmax(logits,1)
             self.preds_val = [] #list of predictions of each batch
-            for i in xrange(self._num_steps-1, self.batch_size*self._num_steps,self._num_steps):
+            for i in xrange(self._num_steps-1, self._batch_size*self._num_steps, self._num_steps):
                 # for each num_steps period you should keep the last prediction
                 self.preds_val.append(tf.scalar_summary(self._prefix+"_predictions_b"+str((i-self._num_steps+1)/self._num_steps), preds[i]))
-            
-            #write away
-            #self.preds_val_tot = []
-            #for i in range(self._num_steps*self.batch_size):
-            #    self.preds_val_tot.append(tf.scalar_summary(self._prefix+"_predictions", preds[i]))
         return logits
     
     def loss(self, output_size, gpu=True):
@@ -126,11 +143,10 @@ class LSTMModel(object):
         device_name='/cpu:0'
         if gpu:
             device_name='/gpu:0'
-            #device_name='/cpu:0'
         
         # Necessary placeholders for input
         with tf.device(device_name):
-            self._targets = tf.placeholder(tf.float32, [self.batch_size, self._num_steps, output_size], name=self._prefix+"_targets_ph")
+            self._targets = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, output_size], name=self._prefix+"_targets_ph")
         # Loss learning layer
         with tf.name_scope(self._prefix+'loss'):
             with tf.device(device_name):
@@ -151,11 +167,6 @@ class LSTMModel(object):
             self.targs_val=[]
             for i in xrange(self._num_steps-1, self.batch_size*self._num_steps,self._num_steps):
                 self.targs_val.append(tf.scalar_summary(self._prefix+"_targets_b"+str((i-self._num_steps+1)/self._num_steps), targs[i]))
-                
-            #in case num_steps is the full movie length => return the full movie length    
-            #self.targs_val_tot=[]
-            #for i in range(self._num_steps*self.batch_size):
-            #    self.targs_val_tot.append(tf.scalar_summary(self.prefix+"_targets", targs[i]))
         return loss
     
     def training(self, gpu=True, optimizer_type='GradientDescent'):
@@ -165,8 +176,7 @@ class LSTMModel(object):
         device_name='/cpu:0'
         if gpu:
             device_name='/gpu:0'
-            #device_name='/cpu:0'
-        
+            
         with tf.device(device_name):
             self._lr = tf.Variable(0.0, trainable=False, name=self._prefix+"_learning_rate")
         
@@ -174,7 +184,6 @@ class LSTMModel(object):
             with tf.device(device_name):
                 tvars = tf.trainable_variables()
                 grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars), 5)# max_grad_norm = 5
-                #import pdb; pdb.set_trace()
                 # optimizer will apply calculated gradients at a certain training rate
                 if optimizer_type == 'RMSProp': 
                     optimizer = tf.train.RMSPropOptimizer(self._lr, decay=0.9, momentum=0.0, epsilon=1e-10, use_locking=False, name='RMSProp')
@@ -188,9 +197,7 @@ class LSTMModel(object):
                     optimizer = tf.train.AdamOptimizer(learning_rate=self._lr, beta1=0.9, beta2=0.999, epsilon=1e-08, use_locking=False, name='Adam')
                 elif optimizer_type == 'Adagrad':
                     optimizer = tf.train.AdagradOptimizer(self._lr, initial_accumulator_value=0.1, use_locking=False, name='Adagrad')
-                #elif optimizer_type == 'Adadelta':
-                #    optimizer = tf.train.AdadeltaOptimizer(learning_rate=0.001, rho=0.95, epsilon=1e-08, use_locking=False, name='Adadelta')
-                else : 
+                else:
                     raise ModelError("This type of optimizer is not defined: "+optimizer_type)
                     return -1
                 self._train_op = optimizer.apply_gradients(zip(grads, tvars))
@@ -204,25 +211,24 @@ class LSTMModel(object):
                             self.state_hist, 
                             self.w_hist,
                             self.b_hist, 
-                            self.logits_hist]+self.preds_val+self.targs_val #self.loss_val, 
+                            self.logits_hist]+self.preds_val+self.targs_val 
         return tf.merge_summary(list_of_tensors)
-    
-    def merge_all(self):
-        """
-        Specify which values are written down in the logfile and visualized on the tensorboard
-        for the case that the network is unrolled over all frames and all batches (return all values)
-        NOT WORKING so far...
-        """
-        for i in range(self.targs_val_tot):
-            summary_string = tf.merge_summary(targs_val_tot[i])
-            writer.add_summary(summary_string, i)
+
     
     def assign_lr(self, session, lr_value):
         session.run(tf.assign(self.lr, lr_value))
-        
+
+    @property
+    def lr(self):
+        return self._lr
+    
     @property
     def prefix(self):
         return self._prefix
+    
+    @property
+    def is_training(self):
+        return self._is_training
     
     @property
     def hidden_size(self):
@@ -231,17 +237,7 @@ class LSTMModel(object):
     @property
     def num_layers(self):
         return self._num_layers
-    
-    @property
-    def is_training(self):
-        return self._is_training
-    
-    @property
-    def writer(self):
-        return self._writer
-    #@property
-    #def preds(self):
-    #    return self._preds
+        
     @property
     def logits(self):
         return self._logits
@@ -271,17 +267,15 @@ class LSTMModel(object):
         return self._states
 
     @property
-    def lr(self):
-        return self._lr
-
-    @property
     def train_op(self):
         return self._train_op
     
+    #number of steps the network unrolls
     @property
     def num_steps(self):
         return self._num_steps
-    
+    #the number of movies the model can evaluate in 1 time
+    #movies have to be the same length
     @property
     def batch_size(self):
         return self._batch_size
