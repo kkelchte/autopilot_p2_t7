@@ -16,14 +16,21 @@
 
 ##STEP 2: see how small you can make the prefered model
 ##              model hsize
-./condor_task.sh big 30
-./condor_task.sh big 20
-./condor_task.sh big 10
-./condor_task.sh big 5
-./condor_task.sh big 3
-./condor_task.sh big 2
-./condor_task.sh big 1
+#./condor_task.sh big 30
+#./condor_task.sh big 20
+# ./condor_task.sh big 10
+# ./condor_task.sh big 5
+# ./condor_task.sh big 3
+# ./condor_task.sh big 2
+# ./condor_task.sh big 1
 ## adapt size in default values of pilot code
+
+./condor_task.sh big 0.001
+./condor_task.sh dumpster 0.001
+./condor_task.sh dumpster 0.01
+./condor_task.sh dumpster 0.1
+./condor_task.sh dumpster 0.0001
+./condor_task.sh dumpster 0.00001
 
 ##STEP 3: choose optimizer
 ##              model optimizir

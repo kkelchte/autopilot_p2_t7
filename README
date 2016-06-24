@@ -1,1 +1,21 @@
 My LSTM Autopilot
+
+Folder content:
+
+projectfiles:
+> pilot_CNN: extract features of pretrained CNN (inception) saved as pb-txt-pbtxt file.
+> pilot_data_prepare: aid functions for preparing the data in pilot_data.
+> pilot_data: obtain and prepare features of all data object movies and fully preload the data
+> pilot_eval: evaluate a model (checkpoint: .ckpt) by unrolling 1 step
+> pilot_extract: Extract the finetuned inception v3 features of pilot data.
+> pilot_model: Build the pilot LSTM network, later add CNN layers here
+> pilot_read: Read and preprocess the RGB images of the data set.
+> pilot_settings: groupings all the hyperparameters of the networks trained.
+> pilot_states: creating image with overview of inner states.
+> pilot_train: Main script for training the LSTM model on features.
+
+extra:
+> tmp_scripts: temporal scripts used for preparing data, running jobs, cleaning results, ...
+> *.pyc: bytecodes
+> __init__.py: file claiming this folder as a package
+

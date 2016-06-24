@@ -1,3 +1,8 @@
+"""
+This script extract features from a pretrained CNN saved in a .pb, .txt. and .pbtxt file.
+In this case the inception network trained on imagenet.
+
+"""
 import os, sys, re
 import tensorflow as tf
 from os import listdir

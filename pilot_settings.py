@@ -16,7 +16,7 @@ tf.app.flags.DEFINE_string(
     "log_directory", "/esat/qayd/kkelchte/tensorflow/lstm_logs/",
     "This is the directory for log files that are visualized by tensorboard")
 tf.app.flags.DEFINE_string(
-    "log_tag", "",
+    "log_tag", "testing",
     "an extra tag to give some information about the job")
 
 
@@ -28,7 +28,9 @@ def extract_logfolder():
     logfolder = FLAGS.log_directory+FLAGS.model
     # Read the flags from the input
     # Training flags
-    if FLAGS.log_tag != "": 
+    if FLAGS.log_tag == "testing": 
+        logfolder = logfolder + "_"+ str(FLAGS.log_tag)
+    elif FLAGS.log_tag != "no_test": # not testing
         logfolder = logfolder + "_"+ str(FLAGS.log_tag)
     try:#only runs this when these values are actually set
         if not FLAGS.random_order: 
@@ -78,17 +80,17 @@ class Configuration:
 
 class SmallConfig(Configuration):
     """small config, for testing."""
-    #training_objects = ['modelaaa','modelcba','modelfee']
-    training_objects = ['modelaaa']
+    training_objects = ['modelbaa','modelaba','modelbee','modelfee']
+    #training_objects = ['modelaaa']
     validate_objects = ['modelaaa']
     test_objects = ['modelaaa']
     
     def __init__(self):
-        FLAGS.sample = 20
+        FLAGS.sample = 16
         FLAGS.num_layers = 1
-        FLAGS.hidden_size = 1 #dimensionality of cell state and output
-        FLAGS.max_epoch = 1
-        FLAGS.max_max_epoch = 1
+        FLAGS.hidden_size = 2 #dimensionality of cell state and output
+        FLAGS.max_epoch = 5
+        FLAGS.max_max_epoch = 10
         FLAGS.feature_type = 'app' #flow or app or both
         FLAGS.network='inception'
         
@@ -103,9 +105,35 @@ class LogitsConfig(Configuration):
         #Overwrite the FLAGS from the user according to the flags
         #defined in this configuration
         FLAGS.feature_type = 'app' #flow or app or both
-        FLAGS.network = 'logits_noisy' #or logits_noisy
+        FLAGS.network = 'logits' #or logits_noisy
         FLAGS.learning_rate = 0.01
         
+class DumpsterConfig(Configuration):
+    """train only on logit data ==> requires a bit a different network"""
+    #training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
+    #validate_objects = ['modeldea','modelabe']
+    #test_objects = ['modelaaa', 'modelccc']
+    training_objects = ['dumpster','ragdoll','polaris_ranger', 'box']
+    validate_objects = ['wooden_case','cafe_table']
+    test_objects = ['dumpster','ragdoll','wooden_case','polaris_ranger','box', 'cafe_table']
+    def __init__(self):
+        #Overwrite the FLAGS from the user according to the flags
+        #defined in this configuration
+        FLAGS.feature_type = 'app' #flow or app or both
+        FLAGS.dataset = 'data'
+        
+class TestConfig(Configuration):
+    """evaluate on real data"""
+    training_objects=[]
+    validate_objects=[]
+    test_objects=['modelbee','modelbee_bluewall',
+                  'modelbee_bricks', 'modelbee_gray',
+                  'modelbee_cylinder','modelbee_cylinder_blue',
+                  'modelbee_light','modelbee_noisy'] #['bag_narrow'] < real data
+    def __init__(self):
+        """reset some flags"""
+        FLAGS.dataset='testset' #'generated_world'
+
 class BigConfig(Configuration):
     """Big config, for real training on generated data set.
         List of objects is obtained from pilot_data
@@ -128,6 +156,10 @@ def get_config():
         config = SmallConfig()
     elif FLAGS.model == "logits":
         config = LogitsConfig()
+    elif FLAGS.model == "dumpster":
+        config = DumpsterConfig()
+    elif FLAGS.model == "test":
+        config = TestConfig()
     else:
         config = Configuration()
     

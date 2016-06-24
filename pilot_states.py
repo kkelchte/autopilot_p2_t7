@@ -1,3 +1,7 @@
+"""
+module for creating image with overview of inner states.
+Used by pilot_train.
+"""
 import numpy.random as nr
 import numpy as np
 import matplotlib

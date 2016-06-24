@@ -1,6 +1,6 @@
- #
- # This code is used by pilot_train for getting the data and the ground truth from the images
- #
+ """
+  This code is used by pilot_train for getting the data and the ground truth from the images
+ """
  
 import os
 import re
@@ -11,6 +11,7 @@ import tensorflow as tf
 from os import listdir
 from os.path import isfile,join
 import time
+import random
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -148,18 +149,19 @@ def prepare_data(data_objects):
         
     # resize according to num_steps of shortest video
     # and downsample in time to get a frame every 10 or 100 frames
-    ds_data = np.zeros((len(data),int(min_steps/FLAGS.sample)+1,data[0].shape[1]))
-    ds_labels = np.zeros((len(data), int(min_steps/FLAGS.sample)+1, labels[0].shape[1]))
+    ds_data = np.zeros((len(data),int(min_steps/FLAGS.sample),data[0].shape[1]))
+    ds_labels = np.zeros((len(data), int(min_steps/FLAGS.sample), labels[0].shape[1]))
     
     #loop over batches (in this implementation is this always 1 batch)
     for b in range(len(data)):
         j=0
         for i in range(min_steps):
-            if (i%FLAGS.sample) == 0:
+            if (i%FLAGS.sample) == 0 and j<ds_data.shape[1]:
                 ds_data[b,j]= data[b][i]
                 ds_labels[b,j]=labels[b][i]
                 j=j+1
     
+    #import pdb;pdb.set_trace()
     #Normalize the subsampled features if necessary
     if FLAGS.normalized:
         norm_data = np.zeros(ds_data.shape)
@@ -293,8 +295,73 @@ def get_list(directory,filename):
     list_o = [l[len(directory):] for l in list_o]
     return list_o
 
-
+def pick_random_windows(data_list, window_sizes, batch_sizes):
+    '''create batches of different windowsizes for training different unrolled models.
+    The batches are picked randomly from all the datalist. The batch and window sizes are defined in the arguments.
+    Args:
+        data_list: the data list containing tuples with data and labels of batches (of equal size)
+        windowsizes: a list with the windowsizes needed corresponding to the list of unrolled networks to be trained
+        batchsizes: a list of batchsizes for each window set according to the scale factor depending on the size of your RAM and GPU mem
+    Return:
+        windowed_data: a list of tuples with each tuple the according windowsize and batchsize as set by the arguments. The data is picked randomly from the data list. TODO shouldnt be send back as this demands copying a lot of data.
+        indices: a list of arrays corresponding to the structure of the windowed data only without the tuples.
+        Each element in the list is a array with sets of movie-indices. Every set of movie indices is an array of 3 numbers:
+        [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
+        
+    '''
+    feature_size = data_list[0][0].shape[2]
+    output_size = data_list[0][1].shape[2]
+    #print 'feature_size: ', feature_size
+    #print 'output_size: ', output_size
     
+    # go from big to small windowsize and only pick a movie sequence that is not used yet(?)
+    #windowed_data = []
+    indices = []
+    for wsize in reversed(window_sizes):
+        #see how many movies of this windowsize are needed
+        batch_size = batch_sizes[window_sizes.index(wsize)]
+        #data = [] #np.zeros((batchsize, wsize, feature_size))
+        #labels = [] #np.zeros((batchsize, wsize, output_size))
+        w_indices = [] #the set of indices for the batch of this window size
+        # make a list of indices pointing to batch_tuples with movies from which you can pick a window of this size randomly
+        inds = [i for i in range(len(data_list)) if data_list[i][0].shape[1] > wsize]
+        while len(w_indices) != batch_size:
+            # choose batch tuple to pick a window randomly
+            tup_ind = random.choice(inds)
+            # choose movie in this batch randomly
+            mov_ind = random.choice(range(data_list[tup_ind][0].shape[0]))
+            # choose starting position of the window in this movie randomly
+            start_ind = random.choice(range(data_list[tup_ind][0].shape[1]-wsize))
+            #data.append(np.asarray([data_list[tup_ind][0][mov_ind][start_ind:start_ind+wsize][:]]))
+            #labels.append(np.asarray([data_list[tup_ind][1][mov_ind][start_ind:start_ind+wsize][:]]))
+            w_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
+        #data=np.concatenate(data)
+        #labels=np.concatenate(labels)
+        w_indices=np.concatenate(w_indices)
+        indices.insert(0, w_indices) #insert the indices of this wsize batch
+        #windowed_data.insert(0, (data, labels))
+    #import pdb; pdb.set_trace()    
+    #return windowed_data, indices
+    return indices
+
+def copy_windows_from_data(data_list, window_size, indices):
+    ''' create batch of window_size length
+    Args:
+        data_list: list of tuples containing data and labels each arrays of size [batchsize, framelen, featuresize]
+        windowsize: the windowsize needed corresponding to the list of unrolled networks to be trained
+        batchsize: batchsizes for the window set according to the scale factor depending on the size of your RAM and GPU mem
+        indices: [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
+    Returns:
+         the data and labels according to the windowsize and batchsize as set by the arguments.
+    '''
+    batch_size = indices.shape[0]
+    data = np.zeros((batch_size, window_size, data_list[0][0].shape[2]))
+    labels = np.zeros((batch_size, window_size, data_list[0][1].shape[2]))
+    for i in range(batch_size):
+        tup_ind, mov_ind, start_ind = indices[i]
+        data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
+        labels[i] = data_list[tup_ind][1][mov_ind][start_ind:start_ind+window_size][:]
+    return data, labels
 #####################################################################
 
 if __name__ == '__main__':

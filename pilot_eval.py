@@ -13,8 +13,15 @@ import numpy as np
 import scipy.io as sio
  
 FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_string(
+    "model_dir","/esat/qayd/kkelchte/tensorflow/lstm_logs/features_log/big_app",
+    "define the folder from where the model is restored. It doesnt have to be the same as the log folder.")
+tf.app.flags.DEFINE_boolean(
+    "save_states_eval", False,
+    "Whether or not the innerstates are saved away during evaluation.")
  
-def run_epoch_one_step(session, model, data, targets, eval_op, num_steps=1, writer=None, verbose=False, number_of_samples=500, matfile = ""):
+def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, verbose=False, number_of_samples=500, matfile = ""):
     # Validate / test one step at the time going through the data
     # data is only 1 movie. Not a batch of different movies.
     # this function can also be used when you want to unroll over a few time steps but not all
@@ -23,7 +30,9 @@ def run_epoch_one_step(session, model, data, targets, eval_op, num_steps=1, writ
     costs = 0.0
     iters = 0.0
     score = 0.0
-    state = model.initial_state.eval()
+    state = session.run(model.zero_state)
+    
+    num_steps=1
     
     #In case you loop over frames in steps of size 1
     list_of_states = []
@@ -61,7 +70,7 @@ def run_epoch_one_step(session, model, data, targets, eval_op, num_steps=1, writ
         costs += current_loss
     
     # Keep track of cell states saved in the list_of_states
-    if(writer != None) and (matfile != ""):
+    if(writer != None) and (matfile != "") and FLAGS.save_states_eval:
         #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
         states = np.concatenate(list_of_states)
         trgts = targets.reshape((-1,outputs.shape[1]))
@@ -74,6 +83,33 @@ def run_epoch_one_step(session, model, data, targets, eval_op, num_steps=1, writ
     ##Add call for tensor accuracy + write it away
     return score, costs, iters
 
+def set_initial_states(models, indices, meval, data_list, sess):
+    '''Set the needed initial states for the models to be trained according to the beginning parts of the movies for windowwise training. Use a seperate session in order to keep the memory at low level.
+    Args:
+        models: training models of which model.initial_state has to be set.
+        indices: the tuple/mov/start indices indicating the training window for that batch.
+        meval: the evaluation (validation) model used.
+        data_list: the original list of grouped tuples according to movie lengths
+    Return:
+        resulting states (for debugging purpose)
+    '''
+    for im in range(len(models)):#index for model
+        model = models[im]
+        prestate = sess.run(model.zero_state)
+        #print 'prestate: ',prestate
+        initial_states = np.zeros(prestate.shape)
+        #print 'initial_states: ',initial_states
+        for ib in range(indices[im].shape[0]):#index of movie in batch
+            [tup_ind, mov_ind, start_ind] = indices[im][ib] #get indices needed for finding data
+            state = sess.run(meval.zero_state) #initialize eval network with zero state
+            for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
+                feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
+                            meval.initial_state: state}
+                outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+            initial_states[ib]=state
+        #print 'initial_states: ',initial_states
+        sess.run(tf.assign(model.initial_state, initial_states))
+    
 def evaluate(logfolder, config, scope="model"):
     """Get some evaluation data and test the performance
     of a restored model. The model is chosen according to the flags set by the user.
@@ -88,12 +124,12 @@ def evaluate(logfolder, config, scope="model"):
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         with tf.Session() as session:
-            saver.restore(session, logfolder+"/model.ckpt")
-            print "model restored", logfolder+"/model.ckpt"
+            saver.restore(session, FLAGS.model_dir+"/model.ckpt")
+            print "model restored", FLAGS.model_dir+"/model.ckpt"
             location = logfolder+"/eval"
             writer = tf.train.SummaryWriter(location, graph=session.graph)
             #decide of what movies you want to keep track.
-            movies_to_write_away = [0,1,2,3]
+            movies_to_write_away = [0]
             acc = 0.0
             per = 0.0
             acc_max = 0.0
@@ -101,7 +137,13 @@ def evaluate(logfolder, config, scope="model"):
             for j in range(len(test_data_list)):
                 if j in movies_to_write_away: wrtr = writer
                 else: wrtr = None
-                results = run_epoch_one_step(session, 
+                #get the shape of the inner state of the model
+                prestate = session.run(mtest.zero_state)
+                initial_state = np.zeros(prestate.shape)
+                #assign zeros to the initial state of the model
+                session.run(tf.assign(mtest.initial_state, initial_state))
+                
+                results = run_one_step_unrolled(session, 
                                             mtest, 
                                             test_data_list[j][0], 
                                             test_data_list[j][1], 
@@ -123,10 +165,16 @@ def evaluate(logfolder, config, scope="model"):
     print 'evaluation...finished!'
 
 #########################################
-if __name__ == '__main__':
-    
+def main(unused_argv=None):
+    #FLAGS.model_dir = "/esat/qayd/kkelchte/tensorflow/lstm_logs/features_log/big_flow"
+    FLAGS.model = "test"
     logfolder = pilot_settings.extract_logfolder()
-    print 'logfolder ',logfolder
+    print 'logfolder',logfolder
     config = pilot_settings.get_config()
     scope = "model"
     evaluate(logfolder, config, scope)
+
+
+if __name__ == '__main__':
+    tf.app.run()
+    

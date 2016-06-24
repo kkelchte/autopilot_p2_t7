@@ -1,4 +1,6 @@
-"""Build the pilot LSTM network"""
+"""
+Build the pilot LSTM network
+"""
 
 import tensorflow as tf
 import numpy as np
@@ -51,14 +53,14 @@ class LSTMModel(object):
         self._num_layers = FLAGS.num_layers
         
         # Build LSTM graph
-        self._logits = self.inference(FLAGS.num_layers, FLAGS.hidden_size, output_size, feature_dimension, FLAGS.keep_prob, FLAGS.gpu)
+        self._logits = self.inference(FLAGS.num_layers, FLAGS.hidden_size, output_size, feature_dimension, FLAGS.gpu, FLAGS.keep_prob)
         self._cost = self.loss(output_size, FLAGS.gpu)
         
         if self._is_training:
-            self.training(optimizer_type=FLAGS.optimizer)
+            self.training(FLAGS.gpu, optimizer_type=FLAGS.optimizer)
     
     
-    def inference(self, num_layers, hidden_size, output_size, feature_dimension, keep_prob=1.0, gpu=True):
+    def inference(self, num_layers, hidden_size, output_size, feature_dimension, gpu, keep_prob=1.0):
         """Build the LSTM model up to where it may be used for inference.
 
         Args:
@@ -87,11 +89,17 @@ class LSTMModel(object):
                     lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
                 #[batch_size, 1] with value 0
-                self._initial_state = cell.zero_state(self._batch_size, tf.float32)
+                # the zero state is a tensor that calls the cell to represent a zero state vector of length [batchsize, num_layers*hidden_size*2]
+                self._zero_state = cell.zero_state(self._batch_size, tf.float32)
+                print 'self._batch_size: ',self._batch_size
+                # the initial_state should be a variable that can be set
+                # during stepwise unrolling in order to contain the necessary
+                # inner state
+                self._initial_state = tf.Variable(tf.zeros([self._batch_size,hidden_size*num_layers*2]), trainable=False, name=self._prefix+"_initial_state")
                 
                 if self.is_training and keep_prob < 1:
                     self._inputs = tf.nn.dropout(self.inputs, keep_prob)
-                    
+                
                 #unfolled a greater network over num_steps timesteps concatenating the output
                 outputs = []
                 state = self.initial_state
@@ -137,7 +145,7 @@ class LSTMModel(object):
                 self.preds_val.append(tf.scalar_summary(self._prefix+"_predictions_b"+str((i-self._num_steps+1)/self._num_steps), preds[i]))
         return logits
     
-    def loss(self, output_size, gpu=True):
+    def loss(self, output_size, gpu):
         """ Ops required to generate loss.
         """
         device_name='/cpu:0'
@@ -169,7 +177,7 @@ class LSTMModel(object):
                 self.targs_val.append(tf.scalar_summary(self._prefix+"_targets_b"+str((i-self._num_steps+1)/self._num_steps), targs[i]))
         return loss
     
-    def training(self, gpu=True, optimizer_type='GradientDescent'):
+    def training(self, gpu, optimizer_type='GradientDescent'):
         """
         ops required to compute and apply gradients
         """
@@ -253,7 +261,11 @@ class LSTMModel(object):
     @property
     def initial_state(self):
         return self._initial_state
-
+    
+    @property
+    def zero_state(self):
+        return self._zero_state
+    
     @property
     def cost(self):
         return self._cost
