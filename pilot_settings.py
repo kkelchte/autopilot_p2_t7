@@ -46,6 +46,8 @@ def extract_logfolder():
         # Model flags
         if FLAGS.optimizer != "Adam": 
             logfolder = logfolder + "_opt_"+ str(FLAGS.optimizer)
+        if not FLAGS.batchwise_learning:
+            logfolder = logfolder + "_windowwise"
     except AttributeError:
         #in case you are not training... these values wont be set
         print "some flags were not found...probably in pilot_train."
@@ -80,7 +82,7 @@ class Configuration:
 
 class SmallConfig(Configuration):
     """small config, for testing."""
-    training_objects = ['modelbaa','modelaba','modelbee','modelfee']
+    training_objects = ['modelbaa','modelaba','modelbee']#,'modelfee']
     #training_objects = ['modelaaa']
     validate_objects = ['modelaaa']
     test_objects = ['modelaaa']
@@ -90,7 +92,7 @@ class SmallConfig(Configuration):
         FLAGS.num_layers = 1
         FLAGS.hidden_size = 2 #dimensionality of cell state and output
         FLAGS.max_epoch = 5
-        FLAGS.max_max_epoch = 10
+        FLAGS.max_max_epoch = 1 #5
         FLAGS.feature_type = 'app' #flow or app or both
         FLAGS.network='inception'
         

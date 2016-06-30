@@ -65,7 +65,7 @@ tf.app.flags.DEFINE_float(
 #def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
 
 
-def run_batch_unrolled(session, model, data, targets, eval_op, writer=None, verbose=False, number_of_samples=500, matfile = ""):
+def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=None, verbose=False, number_of_samples=500, matfile = ""):
     """
     Args:
         session: current session in which operations are defined
@@ -81,8 +81,6 @@ def run_batch_unrolled(session, model, data, targets, eval_op, writer=None, verb
     costs = 0.0
     iters = 0.0
     score = 0.0
-    # initialize network with 0/initial state (in case of windowwise training, state is set by pilot_eval)
-    state = session.run(model.zero_state)
     #import pdb; pdb.set_trace()
     # prepare data to be fed into the model 
     feed_dict = {model.inputs: data, 
@@ -127,7 +125,7 @@ def run_batch_unrolled(session, model, data, targets, eval_op, writer=None, verb
         print "Accuracy: ",float(score/total), '. Fps:', total/(time.time() - start_time)
     return score, costs, total
    
-def run_epoch(is_training, session, models, data_list, config, location="", i=0, frame_writer=None, window_indices=None, window_sizes=None):
+def run_epoch(is_training, session, models, data_list, config, location="", i=0, frame_writer=None, window_indices=None, window_sizes=None, all_initial_states=None):
     ''' Go 1 epoch through training or validation keeping track of the minimum maximum and average accuracy
     and perplexity. Things are written away in detail with the frame_writer for some epochs and in general with the overview_writer.
     Args:
@@ -189,17 +187,22 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
             mtrain.assign_lr(session, FLAGS.learning_rate * lr_decay)
             print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mtrain.lr)))
             #The next batch is copied into RAM
-            if not FLAGS.batchwise_learning and window_indices and window_sizes:
+            if not FLAGS.batchwise_learning and window_indices and window_sizes and all_initial_states:
                 #import pdb; pdb.set_trace()
                 data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[j], window_indices[j])
+                initial_state = all_initial_states[j]
             else:
                 data = data_list[j][0] 
                 targets = data_list[j][1]
+                # initialize network with 0 initial state
+                initial_state = session.run(mtrain.initial_state)
+                
             results = run_batch_unrolled(session, 
                                          mtrain, 
                                          data, #data 
                                          targets, #targets
                                          mtrain.train_op, #eval op
+                                         initial_state,
                                          writer = writer, #frame writer
                                          verbose = False,
                                          matfile=location+"/trainstates_"+str(i)+".mat")
@@ -232,8 +235,8 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
         feed_dict = {accuracy_av : acc, perplexity_av: per, accuracy_max_min: acc_max}
         summary_str = session.run(merge, feed_dict)
         writer_overview.add_summary(summary_str, i)
-        summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
-        writer_overview.add_summary(summary_str, i)
+        #summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
+        #writer_overview.add_summary(summary_str, i)
         print("Epoch: %d Final Accuracy: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (i + 1, acc, acc_max, winner_index, acc_min, lozer_index))
     sys.stdout.flush()
 
@@ -328,8 +331,9 @@ def main(_):
             batch_sizes = [100, 50, 25, 10, 5, 2]
             batch_sizes = [int(b*FLAGS.scale) for b in batch_sizes]
             
-            #window_sizes = [5,10,200] #TODO debugging purpose
-            #batch_sizes = [10, 5, 2] #TODO debugging purpose
+            if FLAGS.model == "small":
+                window_sizes = [5,10,20] #TODO debugging purpose
+                batch_sizes = [1, 2, 2] #TODO debugging purpose
  
         print 'batch_sizes ',batch_sizes
         print 'window_sizes ',window_sizes
@@ -351,7 +355,7 @@ def main(_):
                                            config.batch_size, config.num_steps, 'train')
                 trainingmodels.append(mtrain)       
             FLAGS.gpu = 'False'
-            mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='val')
+            mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
         
         print "Loading models finished... ", print_time(start_time)
         
@@ -364,6 +368,7 @@ def main(_):
         # Define session and initialize
         session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
         session.run(init)
+        #import pdb; pdb.set_trace()
         
         current_epoch = 0
         #Train while model gets better with upperbound max_max_epoch as number of runs
@@ -386,6 +391,7 @@ def main(_):
             #Train
             epoch_time=time.time()
             indices = None
+            initial_states = None
             if not FLAGS.batchwise_learning: # In case of windowwise training
                 # make a list of tuples containing batches with randomly picked windows of data
                 # the indices are starting indices of the windows in certain data movies 
@@ -393,12 +399,12 @@ def main(_):
                 indices = pilot_data.pick_random_windows(training_data_list, window_sizes, batch_sizes)
                 
                 # set the initial innerstate of the models according to the windows
-                pilot_eval.set_initial_states(trainingmodels, indices, mvalid, training_data_list, session)
+                initial_states = pilot_eval.get_initial_states(trainingmodels, indices, mvalid, training_data_list, session)
                 #res_state = session.run(trainingmodels[0].initial_state)
                 #print 'resulting initial state: ',res_state
                 #import pdb; pdb.set_trace()
                 
-            run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, i, writer, indices, window_sizes)
+            run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, i, writer, indices, window_sizes, initial_states)
             print "Training finished... ", print_time(epoch_time)
             
             #only validate in few cases as it takes a lot of time setting the network on the GPU and evaluating all the movies

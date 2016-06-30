@@ -1,8 +1,6 @@
-"""
-This code groups the functions for evaluating a model by unrolling it one step
-and predicting.
-"""
-
+#This code groups the functions for evaluating a model by unrolling it one step
+#and predicting.
+#
 import pilot_model
 import pilot_data
 import pilot_settings
@@ -11,17 +9,37 @@ import time
 import tensorflow as tf
 import numpy as np
 import scipy.io as sio
+
+import sys
+import pyinotify
  
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string(
-    "model_dir","/esat/qayd/kkelchte/tensorflow/lstm_logs/features_log/big_app",
+    "model_dir","/esat/qayd/kkelchte/tensorflow/lstm_logs/small_testing", #features_log/big_app",
     "define the folder from where the model is restored. It doesnt have to be the same as the log folder.")
 tf.app.flags.DEFINE_boolean(
     "save_states_eval", False,
     "Whether or not the innerstates are saved away during evaluation.")
- 
+tf.app.flags.DEFINE_boolean(
+    "online", False,
+    "Choose online evaluation when script waits for features and outputs control")
+
+#global variable feature bucket is a buffer used by the eventhandler to collect new arrived features as a list of paths
+current_feature = "" # feature now in queue ready to be processed
+last_feature = "" # feature just processed
+frame = 0
+local_state = None
+mtest = None
+
 def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, verbose=False, number_of_samples=500, matfile = ""):
+    """Unroll the model 1 step and evaluate the batches of data 1step at the time and 1 batch at the time.
+    Args:
+        session: current session in which operations are defined
+        model: model object that contains operations and represents network
+        data: an np array containing 1 batch of data [batchsize, num_steps, feature_dimension]
+        targets: [batch, steps, 4]
+    """
     # Validate / test one step at the time going through the data
     # data is only 1 movie. Not a batch of different movies.
     # this function can also be used when you want to unroll over a few time steps but not all
@@ -30,7 +48,7 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
     costs = 0.0
     iters = 0.0
     score = 0.0
-    state = session.run(model.zero_state)
+    state = session.run(model.initial_state)
     
     num_steps=1
     
@@ -83,7 +101,7 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
     ##Add call for tensor accuracy + write it away
     return score, costs, iters
 
-def set_initial_states(models, indices, meval, data_list, sess):
+def get_initial_states(models, indices, meval, data_list, sess):
     '''Set the needed initial states for the models to be trained according to the beginning parts of the movies for windowwise training. Use a seperate session in order to keep the memory at low level.
     Args:
         models: training models of which model.initial_state has to be set.
@@ -93,22 +111,27 @@ def set_initial_states(models, indices, meval, data_list, sess):
     Return:
         resulting states (for debugging purpose)
     '''
+    initial_states_all = []
     for im in range(len(models)):#index for model
         model = models[im]
-        prestate = sess.run(model.zero_state)
-        #print 'prestate: ',prestate
-        initial_states = np.zeros(prestate.shape)
+        zerostate = sess.run(model.initial_state)
+        #print 'zerostate: ',zerostate
+        initial_states = np.zeros(zerostate.shape)
         #print 'initial_states: ',initial_states
         for ib in range(indices[im].shape[0]):#index of movie in batch
             [tup_ind, mov_ind, start_ind] = indices[im][ib] #get indices needed for finding data
-            state = sess.run(meval.zero_state) #initialize eval network with zero state
+            state = sess.run(meval.initial_state) #initialize eval network with zero state
             for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
                 feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
                             meval.initial_state: state}
                 outputs, state = sess.run([meval.logits, meval.state], feed_dict)
             initial_states[ib]=state
+        initial_states_all.append(initial_states)
         #print 'initial_states: ',initial_states
-        sess.run(tf.assign(model.initial_state, initial_states))
+        #sess.run(tf.assign(model.initial_state, initial_states))
+        #import pdb; pdb.set_trace()
+        #model.initial_state = np.asarray(initial_states)
+    return initial_states_all
     
 def evaluate(logfolder, config, scope="model"):
     """Get some evaluation data and test the performance
@@ -138,11 +161,10 @@ def evaluate(logfolder, config, scope="model"):
                 if j in movies_to_write_away: wrtr = writer
                 else: wrtr = None
                 #get the shape of the inner state of the model
-                prestate = session.run(mtest.zero_state)
-                initial_state = np.zeros(prestate.shape)
+                #prestate = session.run(mtest.zero_state)
+                #initial_state = np.zeros(prestate.shape)
                 #assign zeros to the initial state of the model
-                session.run(tf.assign(mtest.initial_state, initial_state))
-                
+                #session.run(tf.assign(mtest.initial_state, initial_state))
                 results = run_one_step_unrolled(session, 
                                             mtest, 
                                             test_data_list[j][0], 
@@ -164,16 +186,105 @@ def evaluate(logfolder, config, scope="model"):
             print 'average perplexity: ',per
     print 'evaluation...finished!'
 
+def evaluate_online(logfolder, config, scope="model"):
+    global current_feature
+    global last_feature
+    global frame
+    global local_state
+    global mtest
+    """This function is called from the main thread and coordinates the one step evaluation.
+    Args:
+        logfolder: the log folder is extracted from all the different user configurations
+        config: the configurations are grouped in a configuration object    
+    """
+    # Restore a saved model fitting this configuration < model_dir
+    with tf.Graph().as_default():
+        config.output = 4
+        config.feature_dimension = 2048
+        with tf.variable_scope(scope):
+            mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+        # Add ops to save and restore all the variables.
+        saver = tf.train.Saver()
+        # Start session
+        with tf.Session() as session:
+            saver.restore(session, FLAGS.model_dir+"/model.ckpt")
+            print "model restored", FLAGS.model_dir+"/model.ckpt"
+            #time.sleep(25)
+            location = logfolder+"/eval"
+            writer = tf.train.SummaryWriter(location, graph=session.graph)
+            #get the shape of the inner state of the model
+            local_state = session.run(mtest.initial_state)
+            #initial_state = np.zeros(prestate.shape)
+            #assign zeros to the initial state of the model
+            #session.run(tf.assign(mtest.initial_state, initial_state))
+            f=0
+            ##initialize notifier
+            # watch manager
+            wm = pyinotify.WatchManager()
+            wm.add_watch('/esat/qayd/kkelchte/simulation/remote_features/', pyinotify.IN_CREATE)
+            # event handler
+            eh = MyEventHandler()
+            # notifier working in the same thread
+            notifier = pyinotify.Notifier(wm, eh, timeout=10)
+            
+            def on_loop(notifier):
+                global current_feature
+                global last_feature
+                global frame
+                global local_state
+                global mtest
+                #import pdb; pdb.set_trace()
+                if current_feature == last_feature:
+                    #print 'wait'
+                    return
+                else:
+                    print 'run through new feature: ',frame
+                    # data needs to be np array [batchsize 1, num_steps 1, feature_dimension]
+                    last_feature='%s' % current_feature # copy string object
+                    data=sio.loadmat(last_feature)
+                    feature=data['features']
+                    print 'shape: ', feature.shape
+                    #time.sleep(5)
+                    # Define evaluate 1step unrolled
+                    feed_dict = {mtest.inputs: feature, 
+                            mtest.initial_state: local_state}
+                    outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
+                    #writer.add_summary(summary_str, f)
+                    outputs=np.argmax(outputs)
+                    print 'output: ', outputs
+                    # Write output to control_output directory
+                    fid = open('/esat/qayd/kkelchte/tensorflow/control_output2/'+str(frame)+'.txt', 'w')
+                    fid.write(str(outputs))
+                    fid.close()
+                    frame=frame+1
+            notifier.loop(callback=on_loop)
+    
+
+class MyEventHandler(pyinotify.ProcessEvent):
+    global current_feature
+    global last_feature
+    #Object that handles the events posted by the notifier
+    def process_IN_CREATE(self, event):
+        global current_feature
+        global last_feature
+        current_feature = event.pathname
+        print "received feature: ", current_feature
+        #print "last feature: ", last_feature
+        
+
+            
 #########################################
 def main(unused_argv=None):
-    #FLAGS.model_dir = "/esat/qayd/kkelchte/tensorflow/lstm_logs/features_log/big_flow"
-    FLAGS.model = "test"
     logfolder = pilot_settings.extract_logfolder()
     print 'logfolder',logfolder
+    FLAGS.modeldir = logfolder
     config = pilot_settings.get_config()
-    scope = "model"
-    evaluate(logfolder, config, scope)
-
+    
+    if FLAGS.online:
+        evaluate_online(logfolder, config)
+    else:
+        evaluate(logfolder, config)
+    print 'done'
 
 if __name__ == '__main__':
     tf.app.run()

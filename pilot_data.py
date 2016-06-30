@@ -1,6 +1,6 @@
- """
-  This code is used by pilot_train for getting the data and the ground truth from the images
- """
+"""
+ This code is used by pilot_train for getting the data and the ground truth from the images
+"""
  
 import os
 import re

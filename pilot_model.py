@@ -43,6 +43,7 @@ class LSTMModel(object):
             prefix = train/validate/test
         '''
         self._is_training=is_training
+        
         # Define in what type input data arrives
         self._batch_size = batch_size
         self._num_steps = num_steps
@@ -72,13 +73,14 @@ class LSTMModel(object):
         Returns:
             softmax_linear: Output tensor with the computed logits.
         """
-         
+                
         device_name='/cpu:0'
         if gpu:
             device_name='/gpu:0'
         # Placeholder for input 
         with tf.device(device_name):
             self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
+            
         print "inference ",self.prefix,": batch ", self._batch_size," size ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
         with tf.variable_scope("LSTM"):
             with tf.device(device_name):
@@ -90,12 +92,17 @@ class LSTMModel(object):
                 cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
                 #[batch_size, 1] with value 0
                 # the zero state is a tensor that calls the cell to represent a zero state vector of length [batchsize, num_layers*hidden_size*2]
-                self._zero_state = cell.zero_state(self._batch_size, tf.float32)
-                print 'self._batch_size: ',self._batch_size
+                self._initial_state = cell.zero_state(self._batch_size, tf.float32)
+                
+                #self._zero_state = cell.zero_state(self._batch_size, tf.float32)
+                #print 'self._batch_size: ',self._batch_size
+                
                 # the initial_state should be a variable that can be set
                 # during stepwise unrolling in order to contain the necessary
                 # inner state
-                self._initial_state = tf.Variable(tf.zeros([self._batch_size,hidden_size*num_layers*2]), trainable=False, name=self._prefix+"_initial_state")
+                #self._initial_state = tf.placeholder(tf.float32, [self._batch_size,hidden_size*num_layers*2], name=self._prfix +"_initial_state")
+                
+                #self._initial_state = tf.get_variable(self._prefix+"_initial_state",[self._batch_size,hidden_size*num_layers*2], trainable=False)
                 
                 if self.is_training and keep_prob < 1:
                     self._inputs = tf.nn.dropout(self.inputs, keep_prob)
