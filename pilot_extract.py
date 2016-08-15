@@ -1,5 +1,5 @@
 """
-Extract the finetuned inception v3 features of pilot data.
+Extract the finetuned inception v3 features of pilot data. [DEPRECATED]
 """
 from __future__ import absolute_import
 from __future__ import division

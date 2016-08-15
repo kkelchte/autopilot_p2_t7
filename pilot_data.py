@@ -19,7 +19,7 @@ tf.app.flags.DEFINE_boolean(
     "normalized", False,
     "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
 tf.app.flags.DEFINE_string(
-    "network", "pcnn",
+    "network", "inception",
     "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
 tf.app.flags.DEFINE_string(
     "feature_type", "app",
@@ -30,7 +30,18 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_integer(
     "sample", "16",
     "Choose the amount the movies are subsampled. 16 is necessary to fit on a 2Gb GPU for both pcnn features.")
-
+tf.app.flags.DEFINE_boolean(
+    "one_hot", False,
+    "Whether or not the input data has one_hot labels after the -gt tag or not.")
+tf.app.flags.DEFINE_string(
+    "data_type", "grouped",
+    "Choose how the data need to be prepared: grouped means into batches of sequences of similar length. Batched means that it splits up the data over batches of 1000 frames. Otherwise it will take each movie as a separate batch and work with batch size of 1.")
+tf.app.flags.DEFINE_integer(
+    "batch_length",1000,
+    "In case of batched data_type choose the length in which the sequences are sliced.")
+tf.app.flags.DEFINE_integer(
+    "max_batch_size",100,
+    "In case of batched data_type choose the maximum number of slices there can be in one batch.")
 class DataError(Exception):
     def __init__(self, value):
         self.value = value
@@ -72,7 +83,11 @@ def get_labels(directoryname):
         return -1
     files = [f for f in listdir(directoryname) if isfile(join(directoryname,f))]
     #obtain the label indicated after 'gt' from the names of the files
-    labels = [re.search(r'gt\d',name).group(0)[2] for name in sorted(files)] 
+    labels = [re.search(r'gt\d*',name).group(0)[2:] for name in sorted(files)]
+    #move all the labels one step earlier in time: remove the first item and repeat the last item
+    #this makes the control appears before the image instead of the otherway around how the images are labelled.
+    labels.remove(labels[0])
+    labels.insert(-1, labels[-1])
     return labels
 
 def one_hot_labels(labels):
@@ -114,16 +129,26 @@ def prepare_data(data_objects):
         feature_types = [FLAGS.feature_type]
     
     for data_object in data_objects:
-        directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object+'_one_cw'
-        labels_obj = one_hot_labels(get_labels(directory))
+        directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
+        if FLAGS.one_hot:
+            labels_string_list=get_labels(directory)
+            label_bin_list = []
+            for label in labels_string_list:
+                label_bin = np.asarray([int(l) for l in label[:]])
+                label_bin_list.append(label_bin)
+            labels_obj = np.asarray(label_bin_list)
+            print "labels_shape: ", labels_obj.shape
+        else:
+            labels_obj = one_hot_labels(get_labels(directory))
+        
         
         minfeat = labels_obj.shape[0]# see that labels, app and flow features are from the same number of frames
         feats_obj = []        
         for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
             if FLAGS.network == 'pcnn': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw.mat', FLAGS.network)
+                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'.mat', FLAGS.network)
             elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_one_cw_'+FLAGS.network+'.mat', FLAGS.network)
+                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
             else: raise DataError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
         #flow is on 2RBG images ==> skip first label to be equal
@@ -272,6 +297,39 @@ def prepare_data_grouped(data_objects):
         batch_list.append((batch_data, batch_labels))
     return batch_list
 
+def prepare_data_batched(data_objects):
+    """get batches of length of 1000 frames from the set of data objects
+    args:
+    data_objects = the list of sequences on which can be trained
+    returns:
+    A list of tuples. Each tuple contains a data and label batch. The batches are all of 1000 frames and picked among the different sequences. [batchsize, numberframes, feature/label dimension]
+    """
+    #list the data
+    all_data = prepare_data_list(data_objects)
+    data_batched = []
+    for sequence in all_data:
+        #sequence[0]#data
+        #sequence[1]#labels
+        num_batch = min([FLAGS.max_batch_size, int(sequence[0].shape[1]/FLAGS.batch_length)]) #number of batches for this sequence
+        batch_data = np.zeros((num_batch, FLAGS.batch_length, sequence[0].shape[2]))
+        batch_labels = np.zeros((num_batch, FLAGS.batch_length, sequence[1].shape[2]))
+        for i in range(num_batch):
+            batch_data[i:i+1,:,:]=sequence[0][:,i:i+FLAGS.batch_length,:]
+            batch_labels[i:i+1,:,:]=sequence[1][:,i:i+FLAGS.batch_length,:]
+            #import pdb; pdb.set_trace()
+        data_tuple = (batch_data, batch_labels)
+        print "data batch shape: ",batch_data.shape
+        data_batched.append(data_tuple)
+    return data_batched
+    
+def prepare_data_general(data_objects):
+    if FLAGS.data_type == "grouped":
+        return prepare_data_grouped(data_objects)
+    elif FLAGS.data_type == "batched":
+        return prepare_data_batched(data_objects)
+    else:
+        return prepare_data_list(data_objects)
+    
 def get_objects():
     # given a dataset read out the train, validate and test_set.txt lists
     # return 3 lists of objects
@@ -289,8 +347,9 @@ def get_list(directory,filename):
     list_f = open(join(directory,filename),'r')
     # read lines in a list
     list_o = list_f.readlines()
-    # cut the newline and _one_cw at the end
-    list_o = [l[:-8] for l in list_o]
+    # cut the newline at the end
+    list_o = [l[:-1] for l in list_o]
+    #import pdb; pdb.set_trace()
     # cut the path, keep the name
     list_o = [l[len(directory):] for l in list_o]
     return list_o
@@ -326,6 +385,7 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
         # make a list of indices pointing to batch_tuples with movies from which you can pick a window of this size randomly
         inds = [i for i in range(len(data_list)) if data_list[i][0].shape[1] > wsize]
         while len(w_indices) != batch_size:
+            #import pdb; pdb.set_trace()
             # choose batch tuple to pick a window randomly
             tup_ind = random.choice(inds)
             # choose movie in this batch randomly
@@ -368,8 +428,14 @@ if __name__ == '__main__':
     print "-----------------------------"
     print "Run test module of pilot_data"
     print "-----------------------------"
-    training_objects, validate_objects, test_objects = get_objects()
-    #training_objects=['modeldaa','modelbbc','modelabe','modelbae','modelacc','modelbca']
+    data_objects=['set_2', 'set_1'];
+    FLAGS.batch_length = 10;
+    FLAGS.dataset='../../tmp/remote_images'
+    FLAGS.sample = 1
+    FLAGS.one_hot=True
+    FLAGS.data_type = "batched"
+    training_data_list = prepare_data_general(data_objects)
+    import pdb; pdb.set_trace()
     #training_objects=['modeldaa']
     #calculate_mean_variance(data_objects = training_objects,feature_type='both', network='inception')
     #result_data, result_labels =prepare_data(training_objects, feature_type='both', dataset='generated', normalized=True)

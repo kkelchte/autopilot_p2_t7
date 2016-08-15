@@ -6,7 +6,7 @@
 
 ##STEP 1: pick CNN feats inception/pcnn app/flow/both
 #                model network feattype batchwise
-./condor_task.sh big inception both True
+#./condor_task.sh big inception both True
 ./condor_task.sh big inception app True
 #./condor_task.sh big inception app False
 #./condor_task.sh big inception flow

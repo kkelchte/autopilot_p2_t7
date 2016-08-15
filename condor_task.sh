@@ -2,19 +2,19 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-TASK='pilot_train.py' 	#name of task in matlab to run
+TASK='pilot_CNN.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
-log_tag="no_test" #tell python this is not a test so it is not including the testing tag
-model="$1"
+#log_tag="no_test" #tell python this is not a test so it is not including the testing tag
+#model="$1"
 #learning_rate="$2"
 #hidden_size="$2"
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
 #random_order="$2"
-network="$2"
-feature_type="$3"
-batchwise="$4"
+#network="$2"
+#feature_type="$3"
+#batchwise="$4"
 
 
 description=""

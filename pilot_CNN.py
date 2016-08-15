@@ -13,6 +13,7 @@ import string
 import pilot_read as pire
 import scipy.io as sio
 import time
+import pyinotify
 
 from os.path import isdir, join, isfile
 
@@ -24,44 +25,65 @@ tf.app.flags.DEFINE_string(
     """imagenet_2012_challenge_label_map_proto.pbtxt.""")
 
 tf.app.flags.DEFINE_string(
-    'tensor', 'final_result:0',
+    "machine","emerald", #features_log/big_app",
+    "define the machine on which the LSTM is loaded and to which features are written.")
+
+tf.app.flags.DEFINE_string(
+    'tensor', 'pool_3:0',
     """the name of the tensor from which the features are extracted."""
     """choose pool_3:0 or softmax:0 for inception network"""
     """choose final_result:0 for finetuned network""")
 
 tf.app.flags.DEFINE_string(
-    'network', 'finetuned',
+    'network', 'inception',
     """the name of the CNN network from which features are extracted.
     this name is picked for naming convention. Pick inception, pcnn or finetuned.""")
 
-### DEFINE CNN NETWORK ###
+tf.app.flags.DEFINE_boolean(
+    "online", False,
+    "Choose online evaluation when script waits for features and outputs control")
 
-#def inference():
+tf.app.flags.DEFINE_boolean(
+    "gpu", True,
+    "Choose if it has to fit on GPU or not")
 
-#def loss():
+tf.app.flags.DEFINE_boolean(
+    "ssh", False,
+    "In case I ssh to jade the source folder of features should be changed and the time delay should be added.")
 
-#def train():
+tf.app.flags.DEFINE_string(
+    'data_dir_offline', '/esat/qayd/tmp/',
+    """Path to data where images are saved""")
 
-#def test():
+tf.app.flags.DEFINE_string(
+    'data_dir_online', '/esat/qayd/tmp/remote_images/set_online',
+    """Path to data where images are saved online""")
+
+frame=0 # frame count for online feature extraction
+current_image="" # first image in queue ready to be processed
+last_image="" #last image that was processed
+feature_tensor=None #the tensor that should be invoked to obtain the feature
+delay=0
 
 def create_graph():
     """Creates a graph from saved GraphDef file and returns a saver."""
     # Creates graph from saved graph_def.pb.
+    
     with tf.gfile.FastGFile(os.path.join(
         FLAGS.model_dir, 'classify_image_graph_def.pb'), 'rb') as f:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
         _ = tf.import_graph_def(graph_def, name='')
     
-def extract():
+def extract_offline():
     '''
     Extract CNN features of appearance and flow images using the inception google network 
     pretrained on imagenet.
     '''
-    chosen_set='generated'
-    movies_dir="/esat/qayd/kkelchte/simulation/"+chosen_set
-    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt")]
-    
+    chosen_set='remote_images'
+    movies_dir=FLAGS.data_dir_offline+chosen_set
+    #movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3")]
+    movies = ["set_7_1"]
     # creates the graph from saved GraphDef
     create_graph()
     
@@ -85,43 +107,141 @@ def extract():
             starttime = time.time()
             print 'movie: ', m,': ',i+1,' of ', len(movies)
             i = i+1
+            #create dir if necessary
+            directory=join(movies_dir,m,'cnn_features')
+            if not os.path.exists(directory):
+                os.makedirs(directory)  
             movie_features_app = []
             rgb_images=[img for img in sorted(listdir(join(movies_dir,m,'RGB'))) if isfile(join(movies_dir,m,'RGB',img))]
             for img in rgb_images:
                 #APP
                 rgbfile = join(movies_dir,m,'RGB',img)
-                #print 'img: ', img, ' of ', len(rgb_images)
+                print 'img: ', img, ' of ', len(rgb_images)
                 image_data = tf.gfile.FastGFile(rgbfile, 'rb').read()
                 features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                 features = np.squeeze(features)
                 movie_features_app.append(features)
             movie_features_flow = []
-            flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
+            #flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
+            #### CHANGED FLOW INTO DEPTH 28-7-2016 ###
+            flow_images=[img for img in sorted(listdir(join(movies_dir,m,'depth'))) if isfile(join(movies_dir,m,'depth',img))]
             for img in flow_images:
                 #FLOW
-                flowfile = join(movies_dir,m,'flow',img)
+                flowfile = join(movies_dir,m,'depth',img)
                 image_data = tf.gfile.FastGFile(flowfile, 'rb').read()
                 features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                 features = np.squeeze(features)
                 movie_features_flow.append(features)
             movie_features_app = np.concatenate([movie_features_app])
             movie_features_flow = np.concatenate([movie_features_flow])
-            
+            #import pdb; pdb.set_trace()
             d = {'features': movie_features_app, 'object': m}
             sio.savemat(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             d = {'features': movie_features_flow, 'object': m}
-            sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+            #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+            sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             
             print 'duration: ', int(time.time()-starttime), '. Estimated time: ', int((time.time()-starttime)*(len(movies)-i))
         
-    
 
+def extract_online():
+    global frame
+    global delay
+    global current_image
+    global last_image
+    global feature_tensor
+    '''Use pyinotify to read images from /esat/qayd/kkelchte/simulation/remote_images
+    extract features from next-to-last layer of inception3 and save in /esat/qayd/kkelchte/simulation/remote_features
+    '''
+    #source_dir='/esat/sadr/tmp/remote_images/'#Dont forget to adapt sshfs bridge on laptop as well if i use different source folder.
+    source_dir=FLAGS.data_dir_online+'/RGB'
+    #source_dir='/esat/qayd/kkelchte/simulation/remote_images/'
+    #source_dir='/esat/qayd/kkelchte/simulation/remote_images_qayd/'
+    if FLAGS.ssh:
+        des_dir ='/esat/'+FLAGS.machine+'/tmp/remote_features/'
+    else:
+        des_dir='/esat/qayd/kkelchte/simulation/remote_features/'
+    if FLAGS.gpu or FLAGS.ssh:
+        device_name='/gpu:0'
+    else:
+        device_name='/cpu:0'
+    with tf.device(device_name):
+        create_graph()
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+        init_op = tf.initialize_all_variables()
+        sess.run(init_op)
+        # 'pool_3:0': A tensor containing the next-to-last layer containing 2048
+        #   float description of the image.
+        # 'DecodeJpeg/contents:0': A tensor containing a string providing JPEG
+        #   encoding of the image.
+        # Runs the softmax tensor by feeding the image_data as input to the graph.
+        feature_tensor = sess.graph.get_tensor_by_name(FLAGS.tensor)
+        ##initialize notifier
+        # watch manager
+        wm = pyinotify.WatchManager()
+        wm.add_watch(source_dir, pyinotify.IN_CREATE)
+        # event handler
+        eh = MyEventHandler()
+        # notifier working in the same thread
+        notifier = pyinotify.Notifier(wm, eh, timeout=10)
+        
+        def on_loop(notifier):
+            global delay
+            global current_image
+            global last_image
+            global frame
+            global feature_tensor
+            #import pdb; pdb.set_trace()
+            if current_image == last_image:
+                #print 'wait'
+                return
+            else:
+                print "run through network: ",frame
+                try:
+                    if FLAGS.ssh: time.sleep(0.01) #wait till file is fully arrived on local harddrive when using ssh
+                    #obtain image
+                    image_data = tf.gfile.FastGFile(current_image, 'rb').read()
+                    features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
+                    
+                    #copy image location if features are correctly extracted.
+                    last_image='%s' % current_image
+                    
+                    features = np.squeeze(features)
+                    features = np.asarray([[features]])
+                    #print "shape check: 1,1,2048 = ", features.shape
+                    d = {'features': features}
+                    sio.savemat(des_dir+str(frame)+'.mat', d)
+                    frame=frame+1
+                    print "delay due to this image: ", time.time()-delay
+                except Exception as e:
+                    print "[CNN] skip image due to error."
+        
+        notifier.loop(callback=on_loop)
+
+class MyEventHandler(pyinotify.ProcessEvent):
+    global current_image
+    global last_image
+    global delay
+    #Object that handles the events posted by the notifier
+    def process_IN_CREATE(self, event):
+        global current_image
+        global last_image
+        global delay
+        current_image = event.pathname
+        print "received image: ", current_image
+        print "last image: ", last_image
+        print "total delay from previous frame: ", time.time()-delay
+        delay=time.time()    
 #####################################################################
 def main(_):
     '''
     call whatever function you would like to test.
     '''
-    extract()
+    if FLAGS.online:
+        FLAGS.ssh = True
+        extract_online()
+    else:
+        extract_offline()
 
 if __name__ == '__main__':
     print "------------------------------------------"

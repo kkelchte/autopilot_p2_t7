@@ -46,8 +46,8 @@ def extract_logfolder():
         # Model flags
         if FLAGS.optimizer != "Adam": 
             logfolder = logfolder + "_opt_"+ str(FLAGS.optimizer)
-        if not FLAGS.batchwise_learning:
-            logfolder = logfolder + "_windowwise"
+        if FLAGS.batchwise_learning:
+            logfolder = logfolder + "_batchwise"
     except AttributeError:
         #in case you are not training... these values wont be set
         print "some flags were not found...probably in pilot_train."
@@ -66,6 +66,9 @@ def extract_logfolder():
         logfolder = logfolder + "_norm_"+ str(FLAGS.normalized)
     if FLAGS.feature_type != "app": 
         logfolder = logfolder + "_"+ str(FLAGS.feature_type)
+    if FLAGS.fc_only: 
+        logfolder = logfolder + "_fc"
+        
     return logfolder
 
 # the class with general empty class variables that are set by the code
@@ -76,16 +79,16 @@ class Configuration:
     feature_dimension = -1
     output_size = -1
     num_steps = -1
-    training_objects = ['modelaaa']
-    validate_objects = ['modelaaa']
-    test_objects = ['modelaaa']
+    training_objects = ['modelaaa_one_cw']
+    validate_objects = ['modelaaa_one_cw']
+    test_objects = ['modelaaa_one_cw']
 
 class SmallConfig(Configuration):
     """small config, for testing."""
-    training_objects = ['modelbaa','modelaba','modelbee']#,'modelfee']
-    #training_objects = ['modelaaa']
-    validate_objects = ['modelaaa']
-    test_objects = ['modelaaa']
+    training_objects = ['modelbaa_one_cw','modelaba_one_cw','modelbee_one_cw']#,'modelfee']
+    #training_objects = ['modelaaa_one_cw']
+    validate_objects = ['modelaaa_one_cw']
+    test_objects = ['modelaaa_one_cw']
     
     def __init__(self):
         FLAGS.sample = 16
@@ -95,6 +98,26 @@ class SmallConfig(Configuration):
         FLAGS.max_max_epoch = 1 #5
         FLAGS.feature_type = 'app' #flow or app or both
         FLAGS.network='inception'
+
+class RemoteConfig(Configuration):
+    """remote config, for images from laptop with oa."""
+    training_objects = ['set_7', 'set_7_1']#,'modelfee']
+    #training_objects = ['modelaaa']
+    validate_objects = ['set_6']
+    test_objects = ['set_6']
+    
+    def __init__(self):
+        FLAGS.sample = 1
+        FLAGS.hidden_size = 100 #dimensionality of cell state and output
+        FLAGS.max_epoch = 15 #50
+        FLAGS.max_max_epoch = 30 #100
+        #FLAGS.hidden_size = 10 #dimensionality of cell state and output
+        #FLAGS.max_epoch = 2
+        #FLAGS.max_max_epoch = 5
+        FLAGS.dataset='../../tmp/remote_images'
+        FLAGS.one_hot=True
+        FLAGS.log_tag='set7d1'
+        FLAGS.data_type = "batched"
         
 class LogitsConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
@@ -115,9 +138,9 @@ class DumpsterConfig(Configuration):
     #training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
     #validate_objects = ['modeldea','modelabe']
     #test_objects = ['modelaaa', 'modelccc']
-    training_objects = ['dumpster','ragdoll','polaris_ranger', 'box']
-    validate_objects = ['wooden_case','cafe_table']
-    test_objects = ['dumpster','ragdoll','wooden_case','polaris_ranger','box', 'cafe_table']
+    training_objects = ['dumpster_one_cw','ragdoll_one_cw','polaris_ranger_one_cw', 'box_one_cw']
+    validate_objects = ['wooden_case_one_cw','cafe_table_one_cw']
+    test_objects = ['dumpster_one_cw','ragdoll_one_cw','wooden_case_one_cw','polaris_ranger_one_cw','box_one_cw', 'cafe_table_one_cw']
     def __init__(self):
         #Overwrite the FLAGS from the user according to the flags
         #defined in this configuration
@@ -128,10 +151,10 @@ class TestConfig(Configuration):
     """evaluate on real data"""
     training_objects=[]
     validate_objects=[]
-    test_objects=['modelbee','modelbee_bluewall',
-                  'modelbee_bricks', 'modelbee_gray',
-                  'modelbee_cylinder','modelbee_cylinder_blue',
-                  'modelbee_light','modelbee_noisy'] #['bag_narrow'] < real data
+    test_objects=['modelbee_one_cw','modelbee_bluewall_one_cw',
+                  'modelbee_bricks_one_cw', 'modelbee_gray_one_cw',
+                  'modelbee_cylinder_one_cw','modelbee_cylinder_blue_one_cw',
+                  'modelbee_light_one_cw','modelbee_noisy_one_cw'] #['bag_narrow'] < real data
     def __init__(self):
         """reset some flags"""
         FLAGS.dataset='testset' #'generated_world'
@@ -162,6 +185,8 @@ def get_config():
         config = DumpsterConfig()
     elif FLAGS.model == "test":
         config = TestConfig()
+    elif FLAGS.model == "remote":
+        config = RemoteConfig()
     else:
         config = Configuration()
     

@@ -26,6 +26,9 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_boolean(
     "gpu", True,
     "Define whether you want to work with GPU or not.")
+tf.app.flags.DEFINE_boolean(
+    "fc_only", False,
+    "Define whether the network contains only a fc layer or also an LSTM")
 
 class ModelError(Exception):
     def __init__(self, value):
@@ -46,7 +49,11 @@ class LSTMModel(object):
         
         # Define in what type input data arrives
         self._batch_size = batch_size
-        self._num_steps = num_steps
+        if not FLAGS.fc_only:
+            self._num_steps = num_steps
+        else :#work with 1step in fully connected feedforward network
+            self._num_steps = 1
+            
         self._prefix = prefix
         
         # Define model
@@ -81,55 +88,66 @@ class LSTMModel(object):
         with tf.device(device_name):
             self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
             
-        print "inference ",self.prefix,": batch ", self._batch_size," size ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
-        with tf.variable_scope("LSTM"):
-            with tf.device(device_name):
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=FLAGS.forget_bias) 
-                #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting 
-                #==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
-                if self.is_training and keep_prob < 1:
-                    lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
-                cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
-                #[batch_size, 1] with value 0
-                # the zero state is a tensor that calls the cell to represent a zero state vector of length [batchsize, num_layers*hidden_size*2]
-                self._initial_state = cell.zero_state(self._batch_size, tf.float32)
+        print "inference ",self.prefix,": batch ", self._batch_size," hiddensize ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
+        if not FLAGS.fc_only:
+            with tf.variable_scope("LSTM"):
+                with tf.device(device_name):
+                    lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=FLAGS.forget_bias) 
+                    #'good' results: 0.9. Init: 0. add forget_bias in order to reduce scale of forgetting 
+                    #==> remember longer initially: f = f'(0.1) + f_b(0.9) = 1.0 ==> keep all? ==> c = f * c_-1 . Default value is 1.
+                    if self.is_training and keep_prob < 1:
+                        lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
+                    cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * int(num_layers))
+                    #[batch_size, 1] with value 0
+                    # the zero state is a tensor that calls the cell to represent a zero state vector of length [batchsize, num_layers*hidden_size*2]
+                    self._initial_state = cell.zero_state(self._batch_size, tf.float32)
+                    
+                    #self._zero_state = cell.zero_state(self._batch_size, tf.float32)
+                    #print 'self._batch_size: ',self._batch_size
+                    
+                    # the initial_state should be a variable that can be set
+                    # during stepwise unrolling in order to contain the necessary
+                    # inner state
+                    #self._initial_state = tf.placeholder(tf.float32, [self._batch_size,hidden_size*num_layers*2], name=self._prfix +"_initial_state")
+                    
+                    #self._initial_state = tf.get_variable(self._prefix+"_initial_state",[self._batch_size,hidden_size*num_layers*2], trainable=False)
+                    
+                    if self.is_training and keep_prob < 1:
+                        self._inputs = tf.nn.dropout(self.inputs, keep_prob)
+                    
+                    #unfolled a greater network over num_steps timesteps concatenating the output
+                    outputs = []
+                    state = self.initial_state
+                    states = []
+                    for time_step in range(self._num_steps):
+                        if time_step > 0: tf.get_variable_scope().reuse_variables()
+                        if time_step == 1: self._state = state # the next run will need the state after the first step to continue
+                        (cell_output, state) = cell(self._inputs[:, time_step, :], state)
+                        # what is the size of this state? [batchsize * layers * hidden_size *2 (for output and cell state)]
+                        outputs.append(cell_output)
+                        states.append(state)
+                    if self._num_steps == 1: self._state = state # if only 1 step is taken, the state is not saved yet.
+                    # make it a nice tensor of shape [batch_size, num_steps*hidden_size]
+                    # reshape so each row correspond to 1 output of hidden_size length
+                    output = tf.reshape(tf.concat(1, outputs), [-1, hidden_size])
+                    self._states = tf.concat(1,states)
+                    #import pdb; pdb.set_trace()
                 
-                #self._zero_state = cell.zero_state(self._batch_size, tf.float32)
-                #print 'self._batch_size: ',self._batch_size
-                
-                # the initial_state should be a variable that can be set
-                # during stepwise unrolling in order to contain the necessary
-                # inner state
-                #self._initial_state = tf.placeholder(tf.float32, [self._batch_size,hidden_size*num_layers*2], name=self._prfix +"_initial_state")
-                
-                #self._initial_state = tf.get_variable(self._prefix+"_initial_state",[self._batch_size,hidden_size*num_layers*2], trainable=False)
-                
-                if self.is_training and keep_prob < 1:
-                    self._inputs = tf.nn.dropout(self.inputs, keep_prob)
-                
-                #unfolled a greater network over num_steps timesteps concatenating the output
-                outputs = []
-                state = self.initial_state
-                states = []
-                for time_step in range(self._num_steps):
-                    if time_step > 0: tf.get_variable_scope().reuse_variables()
-                    if time_step == 1: self._state = state # the next run will need the state after the first step to continue
-                    (cell_output, state) = cell(self._inputs[:, time_step, :], state)
-                    # what is the size of this state? [batchsize * layers * hidden_size *2 (for output and cell state)]
-                    outputs.append(cell_output)
-                    states.append(state)
-                if self._num_steps == 1: self._state = state # if only 1 step is taken, the state is not saved yet.
-                # make it a nice tensor of shape [batch_size, num_steps*hidden_size]
-                # reshape so each row correspond to 1 output of hidden_size length
-                output = tf.reshape(tf.concat(1, outputs), [-1, hidden_size])
-                self._states = tf.concat(1,states)
-                #import pdb; pdb.set_trace()
+                #collect the data
+                self.cell_output_hist = tf.histogram_summary(self._prefix+"_cell_output", cell_output)
+                self.state_hist = tf.histogram_summary(self._prefix+"_state", state)
             
-            #collect the data
-            self.cell_output_hist = tf.histogram_summary(self._prefix+"_cell_output", cell_output)
-            self.state_hist = tf.histogram_summary(self._prefix+"_state", state)
-        
-            
+        else:
+            with tf.variable_scope("hidden1"):
+                with tf.device(device_name):
+                    weights = tf.get_variable("weights", [feature_dimension, hidden_size])
+                    biases = tf.get_variable('biases', [hidden_size])
+                    hidden1 = tf.nn.relu(tf.matmul(tf.squeeze(self._inputs[:,0,:]), weights) + biases)
+            with tf.variable_scope("hidden2"):
+                with tf.device(device_name):
+                    weights = tf.get_variable("weights", [hidden_size, hidden_size])
+                    biases = tf.get_variable('biases', [hidden_size])
+                    hidden1 = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
         # Add a softmax layer mapping the output to 4 logits defining the network
         with tf.name_scope(self._prefix+'_softmax_linear'):
             with tf.device(device_name):
@@ -151,6 +169,7 @@ class LSTMModel(object):
                 # for each num_steps period you should keep the last prediction
                 self.preds_val.append(tf.scalar_summary(self._prefix+"_predictions_b"+str((i-self._num_steps+1)/self._num_steps), preds[i]))
         return logits
+    
     
     def loss(self, output_size, gpu):
         """ Ops required to generate loss.

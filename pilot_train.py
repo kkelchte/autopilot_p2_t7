@@ -18,7 +18,7 @@ import numpy as np
 
 import math
 import shutil
-import sys
+import sys, os
 
 logging = tf.logging
 
@@ -52,14 +52,24 @@ tf.app.flags.DEFINE_integer(
     "max_max_epoch", "100",
     "Maximum of total number of epochs, after this and a test run the program is finished.")
 tf.app.flags.DEFINE_boolean(
-    "batchwise_learning", True,
+    "batchwise_learning", False,
     "Whether the network is trained fully unrolled according to the movie length of the grouped batch.\
     Else it is trained in a windowwize manner unrolling the network the x steps (the windowsize) \
     The batche size is set according to the windowsize.")
 tf.app.flags.DEFINE_float(
     "scale", "4",
-    "In case of windowwize learning, the batchsizes can be scaled according to the size of RAM and GPU.\
+    "NOTUSED In case of windowwize learning, the batchsizes can be scaled according to the size of RAM and GPU.\
     For a 2Gb GPU and 16Gb Ram the scale should be around 4.")
+
+tf.app.flags.DEFINE_boolean(
+    "finetune", False,
+    "Define wheter there should be a model loaded from init_model_dir to finetune or you want to train from scratch."
+    )
+
+tf.app.flags.DEFINE_string(
+    "init_model_dir", "/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception",
+    "location of initial model on which will be finetuned in case of finetuning."
+    )
 
 
 #def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
@@ -285,22 +295,28 @@ def print_time(start_time):
 def main(_):
     start_time = time.time()
     
+    # Get configuration chosen by the model flag ~ reset some predefined flags,
+    # it defines the movies on which is trained/tested/validated,
+    config = pilot_settings.get_config()
+    
     #extract a good name of the logfolder depending on the flags
     logfolder = pilot_settings.extract_logfolder()
     
     # Delete logfolder if its already used, otherwise it gets huge
-    shutil.rmtree(logfolder,ignore_errors=True)
+    if os.path.isdir(logfolder) and FLAGS.log_tag != 'testing':
+        raise NameError( 'Logfolder already exists, overwriting alert: '+ logfolder )
+        #sys.exit(0)
+    else :      
+        shutil.rmtree(logfolder,ignore_errors=True)
+    
     print 'Logfolder: ', logfolder
     
-    # Get configuration chosen by the model flag ~ reset some predefined flags,
-    # it defines the movies on which is trained/tested/validated,
-    config = pilot_settings.get_config()
     
     # List of sorted(already done in txt file) tuples (data, labels), each tuple corresponds to one training movie
     # data is an array of shape [batch_of_movies, movie_length, feature_dimension]
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
     data_time = time.time()
-    training_data_list = pilot_data.prepare_data_grouped(config.training_objects)
+    training_data_list = pilot_data.prepare_data_general(config.training_objects)
     #else : training_data_list = pilot_data.prepare_data_list(config.training_objects)
     validate_data_list = pilot_data.prepare_data_list(config.validate_objects)
     print 'loading data, ',print_time(data_time)
@@ -309,6 +325,7 @@ def main(_):
     config.output=training_data_list[0][1].shape[2]
     config.feature_dimension=training_data_list[0][0].shape[2]
     
+    #import pdb; pdb.set_trace()
     # Tell TensorFlow that the model will be built into the default Graph.
     #with tf.Graph().as_default(), tf.Session() as session:
     #with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(log_device_placement=True, log_device_placement=True)) as session, tf.device('/cpu:0'):
@@ -324,12 +341,14 @@ def main(_):
             batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
             window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
         else: # in case of windowwise learning
-            window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
+            #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
+            #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
+            window_sizes = [5, 10, 50, 100]#,500]
             #it would be good if batch_sizes were adaptive to trainingdata... 
             #if there are only x movies of largest length
             #batchsize shouldnt be bigger than x and other batches could be bigger.
-            batch_sizes = [100, 50, 25, 10, 5, 2]
-            batch_sizes = [int(b*FLAGS.scale) for b in batch_sizes]
+            batch_sizes = [100, 50, 25, 10]#, 5]
+            #batch_sizes = [int(b*FLAGS.scale) for b in batch_sizes]
             
             if FLAGS.model == "small":
                 window_sizes = [5,10,20] #TODO debugging purpose
@@ -362,12 +381,17 @@ def main(_):
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         
-        # Initialize all variables (weights and biases)
-        init = tf.initialize_all_variables()
         
         # Define session and initialize
         session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-        session.run(init)
+        
+        # Initialize all variables (weights and biases)
+        if FLAGS.finetune:
+            saver.restore(session, FLAGS.init_model_dir+"/model.ckpt")
+            print "model restored: ",FLAGS.init_model_dir+"/model.ckpt"
+        else:
+            init = tf.initialize_all_variables()
+            session.run(init)
         #import pdb; pdb.set_trace()
         
         current_epoch = 0
@@ -397,7 +421,7 @@ def main(_):
                 # the indices are starting indices of the windows in certain data movies 
                 # used for finding the initial state of the models
                 indices = pilot_data.pick_random_windows(training_data_list, window_sizes, batch_sizes)
-                
+                #import pdb; pdb.set_trace()
                 # set the initial innerstate of the models according to the windows
                 initial_states = pilot_eval.get_initial_states(trainingmodels, indices, mvalid, training_data_list, session)
                 #res_state = session.run(trainingmodels[0].initial_state)
