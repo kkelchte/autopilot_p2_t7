@@ -42,32 +42,36 @@ def extract_logfolder():
             else:
                 lr = str(FLAGS.learning_rate)
                 lr = lr[:lr.find('.')]
-            logfolder = logfolder + "_lr_"+ lr
+            logfolder = logfolder + "_lr_"+ str(lr)
         # Model flags
         if FLAGS.optimizer != "Adam": 
             logfolder = logfolder + "_opt_"+ str(FLAGS.optimizer)
         if FLAGS.batchwise_learning:
             logfolder = logfolder + "_batchwise"
+        if FLAGS.window_size != 0:
+        	logfolder = logfolder + "_wsize_"+str(FLAGS.window_size)
     except AttributeError:
         #in case you are not training... these values wont be set
         print "some flags were not found...probably in pilot_train."
     if FLAGS.num_layers != 2:
         logfolder = logfolder + "_nlayers_"+ str(FLAGS.num_layers)
-    if FLAGS.hidden_size != 50:
+    if FLAGS.hidden_size != 100:
         logfolder = logfolder + "_sz_"+ str(FLAGS.hidden_size)
     if FLAGS.keep_prob != 1.0: 
         kp = str(FLAGS.keep_prob)[2:]
         kp = "0" + kp
         logfolder = logfolder + "_drop_"+ str(kp)
     # Data flags
-    if FLAGS.network != "pcnn": 
+    if FLAGS.network != "inception": 
         logfolder = logfolder + "_net_"+ str(FLAGS.network)
     if FLAGS.normalized != False: 
         logfolder = logfolder + "_norm_"+ str(FLAGS.normalized)
     if FLAGS.feature_type != "app": 
-        logfolder = logfolder + "_"+ str(FLAGS.feature_type)
+        logfolder = logfolder + "_"+ str(FLAGS.feature_type[:5])
     if FLAGS.fc_only: 
         logfolder = logfolder + "_fc"
+    if FLAGS.step_size_fnn != 1:
+    	logfolder = logfolder + "_stp_"+str(FLAGS.step_size_fnn)
         
     return logfolder
 
@@ -98,11 +102,11 @@ class SmallConfig(Configuration):
         FLAGS.max_max_epoch = 1 #5
         FLAGS.feature_type = 'app' #flow or app or both
         FLAGS.network='inception'
-
+        
 class RemoteConfig(Configuration):
     """remote config, for images from laptop with oa."""
-    training_objects = ['set_7', 'set_7_1']#,'modelfee']
-    #training_objects = ['modelaaa']
+    training_objects = ['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
+    #training_objects = ['set_6']
     validate_objects = ['set_6']
     test_objects = ['set_6']
     
@@ -110,28 +114,65 @@ class RemoteConfig(Configuration):
         FLAGS.sample = 1
         FLAGS.hidden_size = 100 #dimensionality of cell state and output
         FLAGS.max_epoch = 15 #50
-        FLAGS.max_max_epoch = 30 #100
+        FLAGS.max_max_epoch =   30 #100
         #FLAGS.hidden_size = 10 #dimensionality of cell state and output
         #FLAGS.max_epoch = 2
         #FLAGS.max_max_epoch = 5
         FLAGS.dataset='../../tmp/remote_images'
         FLAGS.one_hot=True
-        FLAGS.log_tag='set7d1'
+        FLAGS.log_tag='set7_fc'
         FLAGS.data_type = "batched"
+
+class ContinueConfig(Configuration):
+    """continue config, for images from laptop with oa."""
+    training_objects = ['0000']
+    validate_objects = ['0002']
+    test_objects = ['0003']
         
+    def __init__(self):
+        FLAGS.hidden_size = 100 #dimensionality of cell state and output
+        FLAGS.max_epoch = 50 #15
+        FLAGS.max_max_epoch =   100 #30
+        FLAGS.data_type = "grouped"
+        #FLAGS.hidden_size = 10 #dimensionality of cell state and output
+        #FLAGS.max_epoch = 2
+        #FLAGS.max_max_epoch = 5
+        FLAGS.dataset='../../../emerald/tmp/remote_images/continuous_expert'
+        FLAGS.one_hot=True
+#        FLAGS.log_tag='continue'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.continuous = True
+
+class WallConfig(Configuration):
+    """wall config, small set for testing memory stretching"""
+    training_objects = ['0000_1']
+    validate_objects = ['0001_1']
+    test_objects = ['0002_1']
+        
+    def __init__(self):
+        FLAGS.hidden_size = 100 #dimensionality of cell state and output
+        FLAGS.max_epoch = 50 #15
+        FLAGS.max_max_epoch =  100 #30
+        FLAGS.data_type = "grouped"
+        FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert_fixed'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.one_hot=True
+        FLAGS.continuous = True    
+
 class LogitsConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
     #training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
     #validate_objects = ['modeldea','modelabe']
     #test_objects = ['modelaaa', 'modelccc']
-    training_objects, validate_objects, test_objects = pilot_data.get_objects()
-    
+    #
     def __init__(self):
         #Overwrite the FLAGS from the user according to the flags
         #defined in this configuration
         FLAGS.feature_type = 'app' #flow or app or both
         FLAGS.network = 'logits' #or logits_noisy
         FLAGS.learning_rate = 0.01
+        training_objects, validate_objects, test_objects = pilot_data.get_objects()
+    
         
 class DumpsterConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
@@ -165,7 +206,8 @@ class BigConfig(Configuration):
         This configuration just uses all the general big data settings
         The configuration doesnt overwrite any flags so the user can still define these.
     """
-    training_objects, validate_objects, test_objects = pilot_data.get_objects()
+    def __init__(self):
+        training_objects, validate_objects, test_objects = pilot_data.get_objects()
 
 def get_config():
     """deduce the configuration for training, validation and testing according to the flags set by the user
@@ -187,9 +229,19 @@ def get_config():
         config = TestConfig()
     elif FLAGS.model == "remote":
         config = RemoteConfig()
+    elif FLAGS.model == "cont":
+        config = ContinueConfig()
+    elif FLAGS.model == "cwall":
+        config = WallConfig()
     else:
         config = Configuration()
-    
+    # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN
+    # this means FLAGS.fc_only is true and the default values change
+    if FLAGS.fc_only:
+        FLAGS.batchwise_learning = True
+        FLAGS.max_epoch = 2*FLAGS.max_epoch
+        FLAGS.max_max_epoch =  2*FLAGS.max_max_epoch
+        
     return config
 if __name__ == '__main__':
     print 'None'

@@ -15,13 +15,15 @@ import pyinotify
 
 import os, shutil
  
+import matplotlib.pyplot as plt
+
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string(
     "model_dir","/esat/qayd/kkelchte/tensorflow/lstm_logs/big_net_inception", #features_log/big_app",
     "define the folder from where the model is restored. It doesnt have to be the same as the log folder.")
 tf.app.flags.DEFINE_string(
-    "machine","emerald",
+    "machine","qayd",
     "define the machine on which the LSTM is loaded and from which features are read.")
 tf.app.flags.DEFINE_boolean(
     "save_states_eval", False,
@@ -32,6 +34,9 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_boolean(
     "ssh", True,
     "In case I ssh to jade the source folder of features should be changed and the time delay should be added.")
+tf.app.flags.DEFINE_string(
+    "model_name", "remote_set7d3_sz_100_net_inception",
+    "pick which control model is used for steering the online control.")
 
 
 #global variable feature bucket is a buffer used by the eventhandler to collect new arrived features as a list of paths
@@ -58,9 +63,7 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
     costs = 0.0
     iters = 0.0
     score = 0.0
-    state = session.run(model.initial_state)
-    
-    num_steps=1
+    if not FLAGS.fc_only: state = session.run(model.initial_state)
     
     #In case you loop over frames in steps of size 1
     list_of_states = []
@@ -68,37 +71,53 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
     #define what frames you want to write
     frames_to_write=[]
     if(writer != None):
-        write_freq = int((data.shape[1]-num_steps+1)/number_of_samples)
-        if write_freq != 0: frames_to_write = [f for f in range(data.shape[1]-num_steps+1) if (f % write_freq) == 0]
+        write_freq = int((data.shape[1])/number_of_samples)
+        if write_freq != 0: frames_to_write = [f for f in range(data.shape[1]) if (f % write_freq) == 0]
         #if frames - steps > 100 ==> dont do modulo of zero
         #in case frames - steps < 100 ==> save every frame because there are less than 100 steps
         #the summary writer will only record the last <100 steps
-        else: frames_to_write = range(data.shape[1]-num_steps+1)
+        else: frames_to_write = range(data.shape[1])
     
-    for f in range(data.shape[1]-num_steps+1):
-        feed_dict = {model.inputs: data[:,f:f+num_steps,:], 
-                     model.initial_state: state, 
-                     model.targets: targets[:,f:f+num_steps,:]}
-        if f in frames_to_write: #write data away from time to time
-            outputs, state, current_loss, _, summary_str= session.run([model.logits, model.state, model.cost, eval_op, model.merge()],feed_dict)
-            writer.add_summary(summary_str, f)
-        else:
-            # outputs is of shape (num_steps*batchsize, outputsize)
-            outputs, state, current_loss, _= session.run([model.logits, model.state, model.cost, eval_op],feed_dict)
-        iters += data.shape[0] #add these batches as they all where handled
-        list_of_states.append(state)
-        
+    for f in range(data.shape[1]-FLAGS.step_size_fnn):
+        if not FLAGS.fc_only:
+            feed_dict = {model.inputs: data[:,f:f+1,:], 
+                        model.initial_state: state, 
+                        model.targets: targets[:,f:f+1,:]}
+            if f in frames_to_write: #write data away from time to time
+                outputs, state, current_loss, _, summary_str= session.run([model.logits, model.state, model.cost, eval_op, model.merge()],feed_dict)
+                writer.add_summary(summary_str, f)
+            else:
+                # outputs is of shape (1*batchsize, outputsize)
+                outputs, state, current_loss, _= session.run([model.logits, model.state, model.cost, eval_op],feed_dict)
+            iters += data.shape[0] #add these batches as they all where handled
+            list_of_states.append(state)
+        else:#FLAGS.fc_only
+            #concatenate multiple features if wanted
+            frame = np.zeros((1,1,FLAGS.step_size_fnn*data.shape[2]))
+            for i in range(FLAGS.step_size_fnn):
+                frame[0,0,i*data.shape[2]:(i+1)*data.shape[2]]=data[0,f+i,:]
+            #import pdb; pdb.set_trace()
+            feed_dict = {model.inputs: frame, 
+                        model.targets: targets[:,f:f+1,:]}
+            if f in frames_to_write: #write data away from time to time
+                outputs, current_loss, _, summary_str= session.run([model.logits, model.cost, eval_op, model.merge()],feed_dict)
+                writer.add_summary(summary_str, f)
+            else:
+                # outputs is of shape (1*batchsize, outputsize)
+                outputs, current_loss, _= session.run([model.logits, model.cost, eval_op],feed_dict)
+            iters += data.shape[0] #add these batches as they all where handled
+	
 	for m in range(data.shape[0]): #loop over the movies of the batch (in general will be one)
-            if np.argmax(outputs[m*num_steps]) == np.argmax(targets[m,f,:]):#see if this frame is calculated correctly
+            if np.argmax(outputs[m]) == np.argmax(targets[m,f,:]):#see if this frame is calculated correctly
                 score += 1.0 #if your score is correct count it up
             if verbose and (f % int(data.shape[1]/15) == 0):
                 print("Frame: %d batch: %d target: %d prediction: %d speed: %.3f fps"\
-                    %(f, m, np.argmax(targets[m,f,:]), np.argmax(outputs[m*num_steps]),
+                    %(f, m, np.argmax(targets[m,f,:]), np.argmax(outputs[m]),
                     iters * data.shape[0] / (time.time() - start_time)))    
         costs += current_loss
     
     # Keep track of cell states saved in the list_of_states
-    if(writer != None) and (matfile != "") and FLAGS.save_states_eval:
+    if(writer != None) and (matfile != "") and FLAGS.save_states_eval and not FLAGS.fc_only:
         #states = [batchsize, num_steps*hidden_size*num_layers*2 (output;state)]
         states = np.concatenate(list_of_states)
         trgts = targets.reshape((-1,outputs.shape[1]))
@@ -150,7 +169,7 @@ def evaluate(logfolder, config, scope="model"):
     with tf.Graph().as_default():
         test_data_list = pilot_data.prepare_data_list(config.test_objects)
         config.output=test_data_list[0][1].shape[2]
-        config.feature_dimension=test_data_list[0][0].shape[2]
+        config.feature_dimension=test_data_list[0][0].shape[2]*FLAGS.step_size_fnn
         #set params according to the shape of the obtained data
         with tf.variable_scope(scope):
             mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
@@ -218,8 +237,12 @@ def evaluate_online(logfolder, config, scope="model"):
     """
     # Restore a saved model fitting this configuration < model_dir
     with tf.Graph().as_default():
-        config.output = 9 #4
-        config.feature_dimension = 2048
+        if FLAGS.continuous:
+            config.output = 6 #9 #4 ### TODO make this dynamic from model or input flags?
+        if FLAGS.network == 'stijn':
+            config.feature_dimension = 4070 
+        else:
+            config.feature_dimension = 2048
         device_name='/gpu:0'
         with tf.variable_scope(scope), tf.device(device_name):
             mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
@@ -256,34 +279,46 @@ def evaluate_online(logfolder, config, scope="model"):
                 global delay
                 #import pdb; pdb.set_trace()
                 if current_feature == last_feature:
-                    #print 'wait'
-                    return
+                    print 'wait'
+                    #return
                 else:
                     print 'run through new feature: ',frame
                     try:
                         # data needs to be np array [batchsize 1, num_steps 1, feature_dimension]
                         if FLAGS.ssh: time.sleep(0.005) #wait till file is fully arrived on local harddrive when using ssh
                         data=sio.loadmat(current_feature)
-                        feature=data['features']
+                        if FLAGS.network == "inception":
+                            feature=data['features']
+                        elif FLAGS.network == "stijn":
+                            data=data['gazebo_sim_dataset']
+                            feature=data[0,0]['labels']
+                            feature = np.reshape(feature,(1,1,4070))
+                        #import pdb;pdb.set_trace()
+                        #plt.matshow(np.transpose(np.reshape(feature, (74,55))))
+                        #plt.show()
                         # Define evaluate 1step unrolled
                         feed_dict = {mtest.inputs: feature, 
                                 mtest.initial_state: local_state}
                         outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
                         last_feature='%s' % current_feature # copy string object
                         #writer.add_summary(summary_str, f)
-                        outputs=np.argmax(outputs)
-                        #outputs=0
-                        print 'output: ', outputs
+                        if FLAGS.continuous:
+                            output_str = str(outputs[0])[1:-1]
+                        else:
+                            output_str = str(np.argmax(outputs))
+                        print 'output: ', output_str
+                        #import pdb;pdb.set_trace()
+                        
                         # Write output to control_output directory
                         #fid = open('/esat/qayd/kkelchte/tensorflow/control_output/'+str(frame)+'.txt', 'w')
                         fid = open(des_dir+str(frame)+'.txt', 'w')
-                        fid.write(str(outputs))
+                        fid.write(output_str)
                         fid.close()
                         if FLAGS.ssh: time.sleep(0.002) # some time for saving the file
                         frame=frame+1
                         print "delay due to this feature: ", time.time()-delay
                     except Exception as e:
-                        print "[eval] skip feature due to error."
+                        print "[eval] skip feature due to error: ",e
             notifier.loop(callback=on_loop)
     
 
@@ -321,10 +356,13 @@ def main(unused_argv=None):
     config = pilot_settings.get_config()
     
     if FLAGS.online:
-        empty_folder('/esat/emerald/tmp/remote_features')
+        source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
+        empty_folder(source_dir)
+        FLAGS.continuous = True
         FLAGS.ssh = True
         #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set5_windowwise_sz_100_net_inception'
-        FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception'
+        #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception'
+        FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
         evaluate_online(logfolder, config)
     else:
         evaluate(logfolder, config)

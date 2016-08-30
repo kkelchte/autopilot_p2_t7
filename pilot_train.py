@@ -20,6 +20,8 @@ import math
 import shutil
 import sys, os
 
+from sklearn import metrics
+
 logging = tf.logging
 
 FLAGS = tf.app.flags.FLAGS
@@ -54,27 +56,63 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_boolean(
     "batchwise_learning", False,
     "Whether the network is trained fully unrolled according to the movie length of the grouped batch.\
-    Else it is trained in a windowwize manner unrolling the network the x steps (the windowsize) \
-    The batche size is set according to the windowsize.")
+    Else it is trained in a windowwize manner unrolling the network these x steps in time (the windowsize) \
+    The batchsize is set according to the windowsize and the size of the GPU.")
+tf.app.flags.DEFINE_integer(
+	"window_size", 0,
+	"Define what windowsize is used according to the required memory span of the task.\
+	If kept to default value (0) than windowsizes and batchsizes are picked in order to fit on a 2G GPU.")
 tf.app.flags.DEFINE_float(
     "scale", "4",
     "NOTUSED In case of windowwize learning, the batchsizes can be scaled according to the size of RAM and GPU.\
     For a 2Gb GPU and 16Gb Ram the scale should be around 4.")
-
 tf.app.flags.DEFINE_boolean(
     "finetune", False,
     "Define wheter there should be a model loaded from init_model_dir to finetune or you want to train from scratch."
     )
-
 tf.app.flags.DEFINE_string(
     "init_model_dir", "/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception",
     "location of initial model on which will be finetuned in case of finetuning."
     )
+tf.app.flags.DEFINE_integer(
+    "batch_size_fnn", 100,
+    "set the amount of data in one mini batch for training the FNN. In one epoch this minibatch is that many times\
+    applied so it covers in general all the data available."
+    )
 
-
-#def run_epoch(session, model, data, targets, eval_op, merge_op=tf.no_op(), writer=None, verbose=False):
-
-
+def run_batch_fc(session, model, data, targets, eval_op, writer=None, verbose=False):
+    ''' Run one time through the data given in a batch. fc stands for fully connected as we re only training the last layers of an FNN.
+    Args:
+            session: current session in which operations are defined
+            model: model object that contains operations and represents network
+            data: an np array containing 1 batch of data [batchsize, num_steps, feature_dimension]
+            targets: [batch, steps, output_size]
+    '''
+    #print "train FNN... datashape: ", data.shape, "targets shape: ", targets.shape
+    batch_lengths = []
+    feed_dict = {model.inputs: data[:,0:1,:], model.targets: targets[:,0:1,:]}
+    
+    # call the network: forward and backward pass
+    outputs, costs, _ = session.run([model.logits, model.cost, eval_op],feed_dict)
+    
+    trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
+    total = data.shape[0]
+    
+    if FLAGS.continuous:
+        # get the sum of the 2 norm difference between the targets and the outputs over the different batches and timesteps
+        #score = [sum([sum((outputs[i,:]-trgts[i,:])**2) for i in range(outputs.shape[0])])]
+        #score_mae = sum([metrics.mean_absolute_error(trgts[i,:], outputs[i,:]) for i in range(outputs.shape[0])])
+        #score_mse = sum([metrics.mean_squared_error(trgts[i,:], outputs[i,:]) for i in range(outputs.shape[0])])
+        #score_mdae = sum([metrics.median_absolute_error(trgts[i,:], outputs[i,:]) for i in range(outputs.shape[0])])
+        #print 'mae: ',score_mae,'. mse: ',score_mse,'. mdae: ',score_mdae
+        score = metrics.mean_squared_error(trgts, outputs)*total
+        #print 'score ',score
+    else:
+        score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
+    #import pdb; pdb.set_trace()
+    
+    return score, costs, total
+    
 def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=None, verbose=False, number_of_samples=500, matfile = ""):
     """
     Args:
@@ -83,6 +121,7 @@ def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=Non
         data: an np array containing 1 batch of data [batchsize, num_steps, feature_dimension]
         targets: [batch, steps, 4]
     """
+    
     # run one time through the data given in a batch of all equal length.
     # network is fully unrolled. Used during training
     num_steps=data.shape[1]
@@ -100,8 +139,15 @@ def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=Non
     outputs, states, costs, _ = session.run([model.logits, model.states, model.cost, eval_op],feed_dict)
     # reshape outputs, get score
     trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
-    score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
     total = data.shape[0]*num_steps
+    if FLAGS.continuous:
+        # get the sum of the 2 norm difference between the targets and the outputs over the different batches and timesteps
+        #score = [sum([sum((outputs[i,:]-trgts[i,:])**2) for i in range(outputs.shape[0])])]
+        score = metrics.mean_squared_error(trgts, outputs)*total
+    else:
+        score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
+    
+    
     
     # Keep track of cell states
     if(writer != None) and (matfile != "") and FLAGS.save_states_train:
@@ -132,7 +178,8 @@ def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=Non
         if verbose and (i % int(num_steps/15) == 0):
             print("Frame: %d target: %d prediction: %d"%(i, trgt, pred))        
     if verbose:
-        print "Accuracy: ",float(score/total), '. Fps:', total/(time.time() - start_time)
+        if FLAGS.continuous: print "Score: ",score, '. Fps:', total/(time.time() - start_time)
+        else: print "Accuracy: ",float(score/total), '. Fps:', total/(time.time() - start_time)
     return score, costs, total
    
 def run_epoch(is_training, session, models, data_list, config, location="", i=0, frame_writer=None, window_indices=None, window_sizes=None, all_initial_states=None):
@@ -175,7 +222,10 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
     
     #choose 1 model/batch from which the first movie is recorded
     #in case of validation each batch contains only 1 movie
-    if window_indices:
+    if FLAGS.fc_only:
+        chosen_batch = 0
+        indices = [0]
+    elif window_indices:
         chosen_batch = int(random.uniform(0,len(models))) 
         indices = range(len(models))
     else:
@@ -183,6 +233,7 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
         indices = range(len(data_list))
     #pick the models to train first from randomly
     if is_training and FLAGS.random_order: random.shuffle(indices)
+    #import pdb; pdb.set_trace()
     for j in indices:
         if j == chosen_batch : writer = frame_writer
         else : writer = None
@@ -190,32 +241,58 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
         # In case we are training...
         if is_training:
             # if batchwise training loop over tuples containing batches
-            #import pdb; pdb.set_trace()
             mtrain = models[j]
             # learning rate goes down during learning
             lr_decay = FLAGS.lr_decay ** max(i - FLAGS.max_epoch, 0.0)
             mtrain.assign_lr(session, FLAGS.learning_rate * lr_decay)
             print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mtrain.lr)))
             #The next batch is copied into RAM
-            if not FLAGS.batchwise_learning and window_indices and window_sizes and all_initial_states:
-                #import pdb; pdb.set_trace()
-                data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[j], window_indices[j])
-                initial_state = all_initial_states[j]
+            if FLAGS.fc_only:
+                #Prepare data by picking random samples 
+                b_size = FLAGS.batch_size_fnn
+                b_lengths = [data_list[k][0].shape[0]*data_list[k][0].shape[1] for k in range(len(data_list))]
+                # run several times over different minibatches
+                for e in range(int(sum(b_lengths)/b_size)):
+                    data = np.zeros((b_size, 1, data_list[0][0].shape[2]*FLAGS.step_size_fnn))
+                    targets = np.zeros((b_size, 1, data_list[0][1].shape[2]))
+                    for k in range(len(data_list)): #loop over different groups
+                        num = int(b_size*b_lengths[k]/sum(b_lengths)) #number of elements from this group
+                        #print 'list: ',k,'. Num: ', num
+                        for j in range(num):
+                            b_index=int(random.uniform(0,data_list[k][0].shape[0]))#batch index
+                            t_index=int(random.uniform(0,data_list[k][0].shape[1]-FLAGS.step_size_fnn))#time index
+                            data[k+j,0,:]=np.concatenate(data_list[k][0][b_index, t_index:t_index+FLAGS.step_size_fnn, :])
+                            targets[k+j,0,:]=data_list[k][1][b_index, t_index+FLAGS.step_size_fnn-1, :]
+                            #import pdb;pdb.set_trace()
+                            #print 'at ',j,' of ',num,' chosen batch: ',b_index,' chosen time step: ',t_index
+                    res=run_batch_fc(session, mtrain, data, targets, mtrain.train_op, writer=writer)
+                    try:
+                        results = [results[k]+res[k] for k in range(len(res))]
+                    except IndexError : 
+                        results= [res[k] for k in range(len(res))]
+                        pass
+                results = [results[k]/int(sum(b_lengths)/b_size) for k in range(len(results))]
+                #import pdb; pdb.set_trace()     
             else:
-                data = data_list[j][0] 
-                targets = data_list[j][1]
-                # initialize network with 0 initial state
-                initial_state = session.run(mtrain.initial_state)
-                
-            results = run_batch_unrolled(session, 
-                                         mtrain, 
-                                         data, #data 
-                                         targets, #targets
-                                         mtrain.train_op, #eval op
-                                         initial_state,
-                                         writer = writer, #frame writer
-                                         verbose = False,
-                                         matfile=location+"/trainstates_"+str(i)+".mat")
+                if not FLAGS.batchwise_learning and window_indices and window_sizes and all_initial_states:
+                    #import pdb; pdb.set_trace()
+                    data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[j], window_indices[j])
+                    initial_state = all_initial_states[j]
+                else:
+                    data = data_list[j][0] 
+                    targets = data_list[j][1]
+                    # initialize network with 0 initial state
+                    initial_state = session.run(mtrain.initial_state)
+                    
+                results = run_batch_unrolled(session, 
+                                            mtrain, 
+                                            data, #data 
+                                            targets, #targets
+                                            mtrain.train_op, #eval op
+                                            initial_state,
+                                            writer = writer, #frame writer
+                                            verbose = False,
+                                            matfile=location+"/trainstates_"+str(i)+".mat")
         # In case of validation...
         else:
             #define model
@@ -237,9 +314,13 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
         if acc_min > accuracy: 
             acc_min = accuracy
             lozer_index = j
-        acc = acc+accuracy/len(indices)
+        if not FLAGS.continuous or FLAGS.fc_only or FLAGS.batchwise_learning:
+            acc = acc+accuracy/len(indices)
+        elif window_sizes:
+            #Only keep the accuracy of the batch with a large windowsize otherwise it is hard to interpret
+            if window_sizes[j] >= 100:
+                acc = acc+accuracy/len(indices)
         per = per+perplexity/len(indices)
-    
     # write away results of this epoch
     if writer_overview: 
         feed_dict = {accuracy_av : acc, perplexity_av: per, accuracy_max_min: acc_max}
@@ -247,7 +328,7 @@ def run_epoch(is_training, session, models, data_list, config, location="", i=0,
         writer_overview.add_summary(summary_str, i)
         #summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
         #writer_overview.add_summary(summary_str, i)
-        print("Epoch: %d Final Accuracy: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (i + 1, acc, acc_max, winner_index, acc_min, lozer_index))
+        print("Epoch: %d Final Score: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (i + 1, acc, acc_max, winner_index, acc_min, lozer_index))
     sys.stdout.flush()
 
 def define_batch_sizes_for_stepwise_unrolling(data_list):
@@ -299,9 +380,14 @@ def main(_):
     # it defines the movies on which is trained/tested/validated,
     config = pilot_settings.get_config()
     
+    
+    #import pdb; pdb.set_trace()
     #extract a good name of the logfolder depending on the flags
     logfolder = pilot_settings.extract_logfolder()
-    
+    #print "train: ",config.training_objects
+    #print "validate: ",config.validate_objects
+    #print "test: ",config.test_objects
+
     # Delete logfolder if its already used, otherwise it gets huge
     if os.path.isdir(logfolder) and FLAGS.log_tag != 'testing':
         raise NameError( 'Logfolder already exists, overwriting alert: '+ logfolder )
@@ -318,13 +404,16 @@ def main(_):
     data_time = time.time()
     training_data_list = pilot_data.prepare_data_general(config.training_objects)
     #else : training_data_list = pilot_data.prepare_data_list(config.training_objects)
+    #validation set is always one movie with batchsize one and tested with stepsize 1
     validate_data_list = pilot_data.prepare_data_list(config.validate_objects)
-    print 'loading data, ',print_time(data_time)
+    print 'loaded data, ',print_time(data_time)
     
     #set params according to the shape of the obtained data
     config.output=training_data_list[0][1].shape[2]
     config.feature_dimension=training_data_list[0][0].shape[2]
-    
+    if FLAGS.fc_only:
+        config.feature_dimension=FLAGS.step_size_fnn*training_data_list[0][0].shape[2]
+        
     #import pdb; pdb.set_trace()
     # Tell TensorFlow that the model will be built into the default Graph.
     #with tf.Graph().as_default(), tf.Session() as session:
@@ -340,22 +429,33 @@ def main(_):
         if FLAGS.batchwise_learning:
             batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
             window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
+            if FLAGS.fc_only: #in case of training FNN no timesteps are needed
+                window_sizes = [1]
+                batch_sizes = [FLAGS.batch_size_fnn]
         else: # in case of windowwise learning
             #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
             #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
-            window_sizes = [5, 10, 50, 100]#,500]
+            window_sizes = [10, 50, 100]#,500]
+            
+            #window_sizes = [5, 10]
             #it would be good if batch_sizes were adaptive to trainingdata... 
             #if there are only x movies of largest length
             #batchsize shouldnt be bigger than x and other batches could be bigger.
-            batch_sizes = [100, 50, 25, 10]#, 5]
+            batch_sizes = [10, 5, 2]#, 1]
+            #batch_sizes = [25, 10]#, 5]
             #batch_sizes = [int(b*FLAGS.scale) for b in batch_sizes]
-            
+            #raise 
             if FLAGS.model == "small":
-                window_sizes = [5,10,20] #TODO debugging purpose
-                batch_sizes = [1, 2, 2] #TODO debugging purpose
+                window_sizes = [5,10,20] 
+                batch_sizes = [1, 2, 2] 
+            
+            if FLAGS.window_size != 0:
+            		window_sizes = [FLAGS.window_size]
+            		batch_sizes = [FLAGS.batch_size_fnn]
  
         print 'batch_sizes ',batch_sizes
         print 'window_sizes ',window_sizes
+        #import pdb;pdb.set_trace()
         
         # Build the LSTM Graph with 1 model for training, validation
         trainingmodels = []
@@ -373,17 +473,18 @@ def main(_):
                 mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
                                            config.batch_size, config.num_steps, 'train')
                 trainingmodels.append(mtrain)       
-            FLAGS.gpu = 'False'
+            FLAGS.gpu = False
             mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
         
         print "Loading models finished... ", print_time(start_time)
-        
+        print "Number of models: ", len(trainingmodels)
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         
         
         # Define session and initialize
         session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+        #session = tf.Session(config=tf.ConfigProto(allow_soft_placement=False))
         
         # Initialize all variables (weights and biases)
         if FLAGS.finetune:
@@ -401,7 +502,7 @@ def main(_):
             writer = None
             validate = False #only validate at some points during traing but not every epoch
             # write different epochs away as different logs in a logarithmic range till max_max_epoch
-            if i in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,5]):
+            if i in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,2,5]):
                 if i!= 1:
                     #delete logdata of previous run except for the first run
                     location = logfolder+"/e"+str(current_epoch)

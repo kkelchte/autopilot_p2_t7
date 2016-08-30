@@ -20,28 +20,31 @@ tf.app.flags.DEFINE_boolean(
     "Whether or not the input data is normalized (mean substraction and divided by the variance) of the training data.")
 tf.app.flags.DEFINE_string(
     "network", "inception",
-    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy.")
+    "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy or stijn.")
 tf.app.flags.DEFINE_string(
     "feature_type", "app",
-    "app or flow or both.")
+    "app or flow or or depth_estimate or depth_estimate_normalized or both.")
 tf.app.flags.DEFINE_string(
     "dataset", "generated",
     "pick the dataset in /esat/qayd/kkelchte/simulation from which your movies can be found. Options: data or generated.")
 tf.app.flags.DEFINE_integer(
-    "sample", "16",
+    "sample", "1",
     "Choose the amount the movies are subsampled. 16 is necessary to fit on a 2Gb GPU for both pcnn features.")
 tf.app.flags.DEFINE_boolean(
     "one_hot", False,
     "Whether or not the input data has one_hot labels after the -gt tag or not.")
 tf.app.flags.DEFINE_string(
-    "data_type", "grouped",
-    "Choose how the data need to be prepared: grouped means into batches of sequences of similar length. Batched means that it splits up the data over batches of 1000 frames. Otherwise it will take each movie as a separate batch and work with batch size of 1.")
+    "data_type", "listed",
+    "Choose how the data need to be prepared: grouped means into batches of sequences of similar length. Batched means that it splits up the data over batches of 1000 frames. Otherwise it will take each movie as a separate batch and work with batch size of 1 [default].")
 tf.app.flags.DEFINE_integer(
     "batch_length",1000,
     "In case of batched data_type choose the length in which the sequences are sliced.")
 tf.app.flags.DEFINE_integer(
     "max_batch_size",100,
     "In case of batched data_type choose the maximum number of slices there can be in one batch.")
+tf.app.flags.DEFINE_boolean(
+    "continuous", True,
+    "Define the type of the output labels.")
 class DataError(Exception):
     def __init__(self, value):
         self.value = value
@@ -71,6 +74,11 @@ def extract_features(filename, network='pcnn'):
         feats = data['features']
         if feats.shape[1]!=4:
                 loggin.warning("dimensions mismatch with logits features, should be 4")
+    elif network == 'stijn':
+        data=data['gazebo_sim_dataset']
+        feats = data[0,0]['labels']
+        if feats.shape[1]!=4070:
+                loggin.warning("dimensions mismatch with stijn features, should be 4070")
     return feats
    
 def get_labels(directoryname):
@@ -93,6 +101,7 @@ def get_labels(directoryname):
 def one_hot_labels(labels):
     """
     create labels [1], [3] into labels [0100], [0001].
+    of np arrays
     """
     # get maximum ~ number of columns
     mx = int(max(labels))
@@ -101,6 +110,37 @@ def one_hot_labels(labels):
     for i in range(len(labels)):
         oh_labels[i,int(labels[i])]=1
     return oh_labels
+
+def get_labels_from_file(directory):
+    """
+    read out the labels from a txt control file.
+    first 10 ints are the index -space- 6 floats defining the twist
+    """
+    filename=join(directory,"control_info.txt")
+    if not os.path.isfile(filename):
+        raise DataError("control file does not exist: "+str(filename))
+        return -1
+    # read the filename and return the list.
+    list_f = open(filename,'r')
+    # read lines in a list
+    list_c = list_f.readlines()
+    
+    # cut the newline at the end
+    list_c = [l[:-1] for l in list_c]
+    
+    # cut the 10 continuous floats label in the beginning
+    list_c = [l[10:] for l in list_c]
+    
+    # extract a label
+    labels = np.zeros([int(len(list_c)), len(re.findall("\s*\S+", list_c[0]))])
+    for i in range(len(list_c)):
+        #print i,': ', len(re.findall("\s*\S+", list_c[i])), ' : ',re.findall("\s*\S+", list_c[i])
+        f=[float(s) for s in re.findall("\s*\S+",list_c[i])]
+        labels[i,:]=np.array(f)
+    # in case of normal inception features: RGB is only every second label:
+    if FLAGS.network == 'inception':#and not FLAGS.feature_type == both
+        labels=labels[range(1,len(list_c),2)]
+    return labels
 
 def prepare_data(data_objects):
     """
@@ -124,30 +164,34 @@ def prepare_data(data_objects):
     labels = []
     min_steps = 100000
     if FLAGS.feature_type == 'both':
-        feature_types = ['app', 'flow']
+        #feature_types = ['app', 'flow']
+        feature_types = ['depth_estimate', 'app']
     else:
         feature_types = [FLAGS.feature_type]
-    
+    # loop over trajectories
     for data_object in data_objects:
         directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
-        if FLAGS.one_hot:
-            labels_string_list=get_labels(directory)
-            label_bin_list = []
-            for label in labels_string_list:
-                label_bin = np.asarray([int(l) for l in label[:]])
-                label_bin_list.append(label_bin)
-            labels_obj = np.asarray(label_bin_list)
-            print "labels_shape: ", labels_obj.shape
+        if FLAGS.continuous:
+            labels_obj = get_labels_from_file(directory)
         else:
-            labels_obj = one_hot_labels(get_labels(directory))
+            if FLAGS.one_hot:
+                labels_string_list=get_labels(directory)
+                label_bin_list = []
+                for label in labels_string_list:
+                    label_bin = np.asarray([int(l) for l in label[:]])
+                    label_bin_list.append(label_bin)
+                labels_obj = np.asarray(label_bin_list)
+                print "labels_shape: ", labels_obj.shape
+            else:
+                labels_obj = one_hot_labels(get_labels(directory))
         
-        
+        #import pdb; pdb.set_trace()
         minfeat = labels_obj.shape[0]# see that labels, app and flow features are from the same number of frames
         feats_obj = []        
         for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
             if FLAGS.network == 'pcnn': 
                 feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'.mat', FLAGS.network)
-            elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy': 
+            elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy' or FLAGS.network == 'stijn': 
                 feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
             else: raise DataError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
@@ -159,6 +203,22 @@ def prepare_data(data_objects):
             
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
         #print "shape features:",feats_obj.shape
+    
+        if FLAGS.network == 'stijn':
+            rgb_indices=[]
+            #check out the features of value -1 and remove these features + labels from the list
+            # Assume that if stijns depth estimate is used this is in front of the array of feature types
+            for i in range(feats_obj.shape[0]):
+                if feats_obj[i,0] != -1 or feats_obj[i,1] != -1 or feats_obj[i,2] != -1:
+                    rgb_indices.append(i)
+            #print 'rgb indices: ',rgb_indices
+            feats_obj=feats_obj[rgb_indices,:]
+            labels_obj=labels_obj[rgb_indices,:]
+        #import pdb;pdb.set_trace()
+
+        # make them equal lenght: might have missed out some label/feature        
+        labels_obj = labels_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
+        feats_obj = feats_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
         
         if not labels_obj.shape[0]==feats_obj.shape[0]:
             raise DataError("labels vs features mismatch: "+str(labels_obj.shape[0])+"!="+str(feats_obj.shape[0]))
@@ -323,6 +383,7 @@ def prepare_data_batched(data_objects):
     return data_batched
     
 def prepare_data_general(data_objects):
+    print "data_type: ",FLAGS.data_type
     if FLAGS.data_type == "grouped":
         return prepare_data_grouped(data_objects)
     elif FLAGS.data_type == "batched":
@@ -334,6 +395,7 @@ def get_objects():
     # given a dataset read out the train, validate and test_set.txt lists
     # return 3 lists of objects
     directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'
+    print 'directory ', directory
     # read training objects from train_set.txt
     training_objects = get_list(directory,'train_set.txt')
     # read validate objects from validat_set.txt
@@ -351,7 +413,7 @@ def get_list(directory,filename):
     list_o = [l[:-1] for l in list_o]
     #import pdb; pdb.set_trace()
     # cut the path, keep the name
-    list_o = [l[len(directory):] for l in list_o]
+    list_o = [os.path.basename(l) for l in list_o]
     return list_o
 
 def pick_random_windows(data_list, window_sizes, batch_sizes):
@@ -362,7 +424,7 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
         windowsizes: a list with the windowsizes needed corresponding to the list of unrolled networks to be trained
         batchsizes: a list of batchsizes for each window set according to the scale factor depending on the size of your RAM and GPU mem
     Return:
-        windowed_data: a list of tuples with each tuple the according windowsize and batchsize as set by the arguments. The data is picked randomly from the data list. TODO shouldnt be send back as this demands copying a lot of data.
+        windowed_data: a list of tuples with each tuple the according windowsize and batchsize as set by the arguments. The data is picked randomly from the data list. 
         indices: a list of arrays corresponding to the structure of the windowed data only without the tuples.
         Each element in the list is a array with sets of movie-indices. Every set of movie indices is an array of 3 numbers:
         [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
@@ -428,15 +490,15 @@ if __name__ == '__main__':
     print "-----------------------------"
     print "Run test module of pilot_data"
     print "-----------------------------"
-    data_objects=['set_2', 'set_1'];
-    FLAGS.batch_length = 10;
-    FLAGS.dataset='../../tmp/remote_images'
-    FLAGS.sample = 1
-    FLAGS.one_hot=True
-    FLAGS.data_type = "batched"
-    training_data_list = prepare_data_general(data_objects)
-    import pdb; pdb.set_trace()
-    #training_objects=['modeldaa']
+    #data_objects=['set_2', 'set_1'];
+    #FLAGS.batch_length = 10;
+    #FLAGS.dataset='../../tmp/remote_images'
+    #FLAGS.sample = 1
+    #FLAGS.one_hot=True
+    #FLAGS.data_type = "batched"
+    #training_data_list = prepare_data_general(data_objects)
+    #import pdb; pdb.set_trace()
+    ##training_objects=['modeldaa']
     #calculate_mean_variance(data_objects = training_objects,feature_type='both', network='inception')
     #result_data, result_labels =prepare_data(training_objects, feature_type='both', dataset='generated', normalized=True)
     #time.sleep(10)

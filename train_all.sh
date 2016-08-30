@@ -5,9 +5,29 @@
 
 
 ##STEP 1: pick CNN feats inception/pcnn app/flow/both
-#                model network feattype batchwise
-#./condor_task.sh big inception both True
-./condor_task.sh big inception app True
+#                model bwise fc step_size_fnn ftype network wsize bsize sample log_tag
+
+#./condor_task.sh cont False False 1 app inception 0 100 1 no_test
+./condor_task.sh cont False False 1 depth_estimate_normalized stijn 0 100 1 no_test
+
+#./condor_task.sh cont True False 1 app inception 0 100 16 no_test
+#./condor_task.sh cont False True 1 app inception 0 100 1 no_test
+./condor_task.sh cont False True 2 app inception 0 100 1 no_test
+./condor_task.sh cont False True 4 app inception 0 100 1 no_test
+
+#./condor_task.sh cont True False 1 depth_estimate_normalized stijn 0 100 16 no_test
+./condor_task.sh cont False True 1 depth_estimate_normalized stijn 0 100 1 no_test
+#./condor_task.sh cont False True 2 depth_estimate_normalized stijn 0 100 1 no_test
+#./condor_task.sh cont False True 4 depth_estimate_normalized stijn 0 100 1 no_test
+
+# ./condor_task.sh cwall False False 1 app inception 1 500 1 no_test
+# ./condor_task.sh cwall False False 1 app inception 5 100 1 no_test
+# ./condor_task.sh cwall False False 1 app inception 10 50 1 no_test
+# ./condor_task.sh cwall False False 1 app inception 50 10 1 no_test
+# ./condor_task.sh cwall False False 1 app inception 100 5 1 no_test
+# ./condor_task.sh cwall False False 1 app inception 500 1 1 no_test
+# ./condor_task.sh cwall True False 1 app inception 0 100 1 no_test
+
 #./condor_task.sh big inception app False
 #./condor_task.sh big inception flow
 #./condor_task.sh big pcnn both

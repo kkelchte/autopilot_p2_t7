@@ -2,20 +2,26 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-TASK='pilot_CNN.py' 	#name of task in matlab to run
+#TASK='pilot_CNN.py' 	#name of task in matlab to run
+TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
 #log_tag="no_test" #tell python this is not a test so it is not including the testing tag
-#model="$1"
+model="$1"
+batchwise="$2"
+fc="$3"
+stpfc="$4"
+feature_type="$5"
+network="$6"
+wsize="$7"
+bsize="$8"
+sample="$9"
+log_tag="${10}" #'no_test'
 #learning_rate="$2"
 #hidden_size="$2"
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
 #random_order="$2"
-#network="$2"
-#feature_type="$3"
-#batchwise="$4"
-
 
 description=""
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
@@ -24,6 +30,43 @@ if [ ! -z $model ]; then
 	TASK="$TASK --model ${model}"
 	description="${description}_$model"
 fi
+if [ ! -z $batchwise ]; then 
+	TASK="$TASK --batchwise_learning ${batchwise}"
+	description="${description}_bwise_$batchwise"
+fi
+if [ ! -z $fc ]; then 
+	TASK="$TASK --fc_only ${fc}"
+	description="${description}_fc_$fc"
+fi
+if [ ! -z $stpfc ]; then 
+	TASK="$TASK --step_size_fnn ${stpfc}"
+	description="${description}_${stpfc}"
+fi
+if [ ! -z $feature_type ]; then 
+	TASK="$TASK --feature_type ${feature_type}"
+	description="${description}_$feature_type"
+fi
+if [ ! -z $network ]; then 
+	TASK="$TASK --network ${network}"
+	description="${description}_net_$network"
+fi
+if [ ! -z $wsize ]; then 
+	TASK="$TASK --window_size ${wsize}"
+	description="${description}_ws_$wsize"
+fi
+if [ ! -z $bsize ]; then 
+	TASK="$TASK --batch_size_fnn ${bsize}"
+	description="${description}_bs_$bsize"
+fi
+if [ ! -z $sample ]; then 
+	TASK="$TASK --sample ${sample}"
+	description="${description}_sample_${sample}"
+fi
+if [ ! -z $log_tag ]; then 
+	TASK="$TASK --log_tag ${log_tag}"
+	description="${description}_${log_tag}"
+fi
+
 if [ ! -z $learning_rate ]; then 
 	TASK="$TASK --learning_rate ${learning_rate}"
 	description="${description}_lr_$learning_rate"
@@ -48,22 +91,6 @@ if [ ! -z $random_order ]; then
 	TASK="$TASK --random_order ${random_order}"
 	description="${description}_rand_$random_order"
 fi
-if [ ! -z $network ]; then 
-	TASK="$TASK --network ${network}"
-	description="${description}_net_$network"
-fi
-if [ ! -z $feature_type ]; then 
-	TASK="$TASK --feature_type ${feature_type}"
-	description="${description}_$feature_type"
-fi
-if [ ! -z $batchwise ]; then 
-	TASK="$TASK --batchwise_learning ${batchwise}"
-	description="${description}_$batchwise"
-fi
-if [ ! -z $log_tag ]; then 
-	TASK="$TASK --log_tag ${log_tag}"
-	description="${description}_${log_tag}"
-fi
 echo $TASK
 # Delete previous log files if they are there
 if [ -d $condor_output_dir ];then
@@ -73,7 +100,6 @@ rm -f "$condor_output_dir/condor${description}.err"
 else
 mkdir $condor_output_dir
 fi
- 
 temp_dir="/users/visics/kkelchte/tensorflow/examples/pilot/.tmp"
 condor_file="${temp_dir}/condor${description}.condor"
 shell_file="${temp_dir}/run${description}.sh"
@@ -82,13 +108,14 @@ mkdir -p $temp_dir
 #--------------------------------------------------------------------------------------------
 echo "Universe         = vanilla" > $condor_file
 echo "">> $condor_file
-echo "RequestCpus      = 1" >> $condor_file
+echo "RequestCpus      = 8" >> $condor_file
 echo "Request_GPUs	= 1" >> $condor_file
 echo "RequestMemory    = 16G" >> $condor_file
 #echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
-echo "+RequestWalltime = 360000" >> $condor_file
+#100 hours means 4 days 
+echo "+RequestWalltime = 360000" >> $condor_file 
 #echo "+RequestWalltime = 10800" >> $condor_file
 echo "">> $condor_file
 echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\")">> $condor_file
@@ -96,7 +123,7 @@ echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && 
 #echo "Requirements = (CUDAGlobalMemoryMb > 1900) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' ) && (machineowner == Visics)" >> $condor_file
 #echo "Requirements = ((machine == "vega.esat.kuleuven.be") || (machine == "wasat.esat.kuleuven.be") || (machine == "yildun.esat.kuleuven.be"))" >> $condor_file
 
-echo "Niceuser = true" >> $condor_file
+#echo "Niceuser = true" >> $condor_file
 
 echo "Initialdir   =$temp_dir" >> $condor_file
 echo "Executable   = $shell_file" >> $condor_file
@@ -128,4 +155,4 @@ chmod 755 $condor_file
 chmod 755 $shell_file
 
 condor_submit $condor_file
-#echo $condor_file
+echo $condor_file

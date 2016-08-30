@@ -15,7 +15,7 @@ tf.app.flags.DEFINE_integer(
     "num_layers", "2",
     "Define the num_layers of the model.")
 tf.app.flags.DEFINE_integer(
-    "hidden_size", "50",
+    "hidden_size", "100",
     "Define the hidden_size of the model.")
 tf.app.flags.DEFINE_float(
     "keep_prob", "1.0",
@@ -29,6 +29,10 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_boolean(
     "fc_only", False,
     "Define whether the network contains only a fc layer or also an LSTM")
+tf.app.flags.DEFINE_integer(
+    "step_size_fnn", 1,
+    "set the amount frames are concatenated to form a feature of a frame."
+    )
 
 class ModelError(Exception):
     def __init__(self, value):
@@ -84,6 +88,7 @@ class LSTMModel(object):
         device_name='/cpu:0'
         if gpu:
             device_name='/gpu:0'
+        #print "device name: ", device_name
         # Placeholder for input 
         with tf.device(device_name):
             self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
@@ -142,12 +147,12 @@ class LSTMModel(object):
                 with tf.device(device_name):
                     weights = tf.get_variable("weights", [feature_dimension, hidden_size])
                     biases = tf.get_variable('biases', [hidden_size])
-                    hidden1 = tf.nn.relu(tf.matmul(tf.squeeze(self._inputs[:,0,:]), weights) + biases)
+                    hidden1 = tf.nn.relu(tf.matmul(self._inputs[:,0,:], weights) + biases)
             with tf.variable_scope("hidden2"):
                 with tf.device(device_name):
                     weights = tf.get_variable("weights", [hidden_size, hidden_size])
                     biases = tf.get_variable('biases', [hidden_size])
-                    hidden1 = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
+                    output = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
         # Add a softmax layer mapping the output to 4 logits defining the network
         with tf.name_scope(self._prefix+'_softmax_linear'):
             with tf.device(device_name):
@@ -184,17 +189,22 @@ class LSTMModel(object):
         # Loss learning layer
         with tf.name_scope(self._prefix+'loss'):
             with tf.device(device_name):
-                #cross_entropy = -SUM t(x)*ln(l(x))
-                #cross_entropy = tf.nn.softmax_cross_entropy_with_logits(self.logits, tf.reshape(self.targets,[batch_size*self._num_steps, output_size]), name=self._prefix+'_xentropy')
-                #loss = tf.reduce_mean(cross_entropy, name=self._prefix+'_xentropy_mean')
-                
                 targs = tf.argmax(tf.reshape(self.targets,[self.batch_size*self._num_steps, output_size]), 1)
-                loss = tf.nn.seq2seq.sequence_loss_by_example(
-                    [self.logits],
-                    [targs],
-                    [tf.ones([self.batch_size*self.num_steps])]) #weights
-                loss = tf.reduce_sum(loss)/self.batch_size            
-                
+                if not FLAGS.continuous:
+                    #cross_entropy = -SUM t(x)*ln(l(x))
+                    if FLAGS.fc_only:
+                        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(self.logits, tf.reshape(self.targets,[self.batch_size*self._num_steps, output_size]), name=self._prefix+'_xentropy')
+                        loss = tf.reduce_mean(cross_entropy, name=self._prefix+'_xentropy_mean')
+                    else:
+                        loss = tf.nn.seq2seq.sequence_loss_by_example(
+                            [self.logits],
+                            [targs],
+                            [tf.ones([self.batch_size*self.num_steps])]) #weights
+                        loss = tf.reduce_sum(loss)/self.batch_size
+                else: #continuous
+                    loss = tf.reduce_sum(tf.square(tf.reshape(self.targets,[self.batch_size*self._num_steps, output_size]) - self.logits))
+            
+            
             #add scalar for collecting data
             self.loss_val = tf.scalar_summary(self._prefix+"_loss", loss)
             #targs = tf.argmax(tf.reshape(self.targets,[batch_size*self._num_steps, output_size]), 1)
@@ -241,7 +251,10 @@ class LSTMModel(object):
         """ Specify which values are written down in the logfile and visualized on the tensorboard
         for the case the network is unrolled for just a number of steps (return the last values)
         """
-        list_of_tensors = [ self.cell_output_hist, 
+        if FLAGS.fc_only:
+            list_of_tensors = self.preds_val+self.targs_val
+        else:
+            list_of_tensors = [ self.cell_output_hist, 
                             self.state_hist, 
                             self.w_hist,
                             self.b_hist, 

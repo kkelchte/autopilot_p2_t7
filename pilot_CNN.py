@@ -14,6 +14,7 @@ import pilot_read as pire
 import scipy.io as sio
 import time
 import pyinotify
+import stat
 
 from os.path import isdir, join, isfile
 
@@ -25,7 +26,7 @@ tf.app.flags.DEFINE_string(
     """imagenet_2012_challenge_label_map_proto.pbtxt.""")
 
 tf.app.flags.DEFINE_string(
-    "machine","emerald", #features_log/big_app",
+    "machine","qayd", #features_log/big_app",
     "define the machine on which the LSTM is loaded and to which features are written.")
 
 tf.app.flags.DEFINE_string(
@@ -52,12 +53,17 @@ tf.app.flags.DEFINE_boolean(
     "In case I ssh to jade the source folder of features should be changed and the time delay should be added.")
 
 tf.app.flags.DEFINE_string(
-    'data_dir_offline', '/esat/qayd/tmp/',
+    'data_dir_offline', '/esat/emerald/tmp/remote_images/',
     """Path to data where images are saved""")
 
 tf.app.flags.DEFINE_string(
-    'data_dir_online', '/esat/qayd/tmp/remote_images/set_online',
-    """Path to data where images are saved online""")
+    'data_dir_online', '/esat/emerald/tmp/remote_images/set_online',
+    """Path to data where images are saved online. This is the source directory for the network.""")
+
+tf.app.flags.DEFINE_string(
+    'movie',"",
+    """Define from which movie in remote_images pilot_CNN needs to extract the features"""
+    )
 
 frame=0 # frame count for online feature extraction
 current_image="" # first image in queue ready to be processed
@@ -80,10 +86,14 @@ def extract_offline():
     Extract CNN features of appearance and flow images using the inception google network 
     pretrained on imagenet.
     '''
-    chosen_set='remote_images'
+    #chosen_set='wall_expert_fixed'
+    chosen_set='dagger2'
     movies_dir=FLAGS.data_dir_offline+chosen_set
-    #movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3")]
-    movies = ["set_7_1"]
+    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
+    #if len(FLAGS.movie) != 0:
+        #movies = [FLAGS.movie]
+    #else:
+        #movies = ["set_7"]
     # creates the graph from saved GraphDef
     create_graph()
     
@@ -110,13 +120,14 @@ def extract_offline():
             #create dir if necessary
             directory=join(movies_dir,m,'cnn_features')
             if not os.path.exists(directory):
-                os.makedirs(directory)  
+                os.makedirs(directory)
+                os.chmod(directory, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
             movie_features_app = []
             rgb_images=[img for img in sorted(listdir(join(movies_dir,m,'RGB'))) if isfile(join(movies_dir,m,'RGB',img))]
             for img in rgb_images:
                 #APP
                 rgbfile = join(movies_dir,m,'RGB',img)
-                print 'img: ', img, ' of ', len(rgb_images)
+                #print 'img: ', img, ' of ', len(rgb_images)
                 image_data = tf.gfile.FastGFile(rgbfile, 'rb').read()
                 features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                 features = np.squeeze(features)
