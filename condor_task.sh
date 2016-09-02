@@ -5,19 +5,41 @@
 #TASK='pilot_CNN.py' 	#name of task in matlab to run
 TASK='pilot_train.py' 	#name of task in matlab to run
 #val=0			#id number of this condor task avoid overlap
+
+#Wall challenge
+#model='cwall' #"$1"
 #log_tag="no_test" #tell python this is not a test so it is not including the testing tag
-model="$1"
-batchwise="$2"
-fc="$3"
-stpfc="$4"
-feature_type="$5"
-network="$6"
-wsize="$7"
-bsize="$8"
-sample="$9"
-log_tag="${10}" #'no_test'
+
+#OA Inception
+#model='dagger' #'cwall' #"$1"
+#log_tag="4G" #"no_test" #tell python this is not a test so it is not including the testing tag
+#wsize='300' #'500' #"$3"
+#bsize='2' #"500" "$4"
+
+#OA Stijns depth
+#model='dagger' #'cwall' #"$1"
+#log_tag="no_test" #tell python this is not a test so it is not including the testing tag
+#wsize='100' #'500' #"$3"
+#bsize='3' #"500" "$4"
+#feature_type='depth_estimate' #"$5"
+#network='stijn' #"$6"
+
+#Discrete session
+model='dis'
+log_tag='no_test'
+wsize='300'
+bsize='1'
+
+#hidden_size='400' #"$2"
+#batchwise="$2"
+#fc='True' #"$3"
+#stpfc="$4"
+#feature_type="$5"
+#network="$6"
+#sample="$9"
+#log_tag="${10}" #'no_test'
+#mod_dir="${11}" #model dir to finetune
 #learning_rate="$2"
-#hidden_size="$2"
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
@@ -66,6 +88,10 @@ if [ ! -z $log_tag ]; then
 	TASK="$TASK --log_tag ${log_tag}"
 	description="${description}_${log_tag}"
 fi
+if [ ! -z $mod_dir ]; then
+    TASK="$TASK --init_model_dir ${mod_dir}"
+    #description="${description}_${log_tag}"
+fi
 
 if [ ! -z $learning_rate ]; then 
 	TASK="$TASK --learning_rate ${learning_rate}"
@@ -73,7 +99,7 @@ if [ ! -z $learning_rate ]; then
 fi
 if [ ! -z $hidden_size ]; then 
 	TASK="$TASK --hidden_size ${hidden_size}"
-	description="${description}_size_$hidden_size"
+	description="${description}_hsize_$hidden_size"
 fi
 if [ ! -z $keep_prob ]; then 
 	TASK="$TASK --keep_prob ${keep_prob}"
@@ -109,8 +135,9 @@ mkdir -p $temp_dir
 echo "Universe         = vanilla" > $condor_file
 echo "">> $condor_file
 echo "RequestCpus      = 8" >> $condor_file
-echo "Request_GPUs	= 1" >> $condor_file
-echo "RequestMemory    = 16G" >> $condor_file
+echo "Request_GPUs = 1" >> $condor_file
+#echo "RequestMemory = 63G" >> $condor_file
+echo "RequestMemory = 16G" >> $condor_file
 #echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
@@ -119,11 +146,11 @@ echo "+RequestWalltime = 360000" >> $condor_file
 #echo "+RequestWalltime = 10800" >> $condor_file
 echo "">> $condor_file
 echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\")">> $condor_file
-#echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb > 1900) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' ) && (machineowner == Visics)" >> $condor_file
 #echo "Requirements = ((machine == "vega.esat.kuleuven.be") || (machine == "wasat.esat.kuleuven.be") || (machine == "yildun.esat.kuleuven.be"))" >> $condor_file
 
-#echo "Niceuser = true" >> $condor_file
+echo "Niceuser = true" >> $condor_file
 
 echo "Initialdir   =$temp_dir" >> $condor_file
 echo "Executable   = $shell_file" >> $condor_file

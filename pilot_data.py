@@ -23,7 +23,7 @@ tf.app.flags.DEFINE_string(
     "Define from which CNN network the features come: pcnn or inception or logits_clean or logits_noisy or stijn.")
 tf.app.flags.DEFINE_string(
     "feature_type", "app",
-    "app or flow or or depth_estimate or depth_estimate_normalized or both.")
+    "app or flow or or depth_estimate or both.")
 tf.app.flags.DEFINE_string(
     "dataset", "generated",
     "pick the dataset in /esat/qayd/kkelchte/simulation from which your movies can be found. Options: data or generated.")
@@ -31,8 +31,11 @@ tf.app.flags.DEFINE_integer(
     "sample", "1",
     "Choose the amount the movies are subsampled. 16 is necessary to fit on a 2Gb GPU for both pcnn features.")
 tf.app.flags.DEFINE_boolean(
-    "one_hot", False,
+    "one_hot", True,
     "Whether or not the input data has one_hot labels after the -gt tag or not.")
+tf.app.flags.DEFINE_boolean(
+    "read_from_file", True,
+    "Whether or not labels are written in the RGB files or in a file: control_info.txt")
 tf.app.flags.DEFINE_string(
     "data_type", "listed",
     "Choose how the data need to be prepared: grouped means into batches of sequences of similar length. Batched means that it splits up the data over batches of 1000 frames. Otherwise it will take each movie as a separate batch and work with batch size of 1 [default].")
@@ -45,6 +48,10 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_boolean(
     "continuous", True,
     "Define the type of the output labels.")
+tf.app.flags.DEFINE_boolean(
+    "short_labels", False,
+    "Use only 2 labels, one for up/down, one for left/right.")
+    
 class DataError(Exception):
     def __init__(self, value):
         self.value = value
@@ -81,7 +88,7 @@ def extract_features(filename, network='pcnn'):
                 loggin.warning("dimensions mismatch with stijn features, should be 4070")
     return feats
    
-def get_labels(directoryname):
+def get_labels_from_directory(directoryname):
     """This functions extract the ground truth from the images in the RGB directory defined by the directoryname
     and return an array with labels for each frame"""
     directoryname = join(directoryname,'RGB')
@@ -92,29 +99,34 @@ def get_labels(directoryname):
     files = [f for f in listdir(directoryname) if isfile(join(directoryname,f))]
     #obtain the label indicated after 'gt' from the names of the files
     labels = [re.search(r'gt\d*',name).group(0)[2:] for name in sorted(files)]
+    
     #move all the labels one step earlier in time: remove the first item and repeat the last item
     #this makes the control appears before the image instead of the otherway around how the images are labelled.
     labels.remove(labels[0])
     labels.insert(-1, labels[-1])
+    
+    #go from list of strings to array of integers
+    labels = np.array(labels).reshape((-1,1))
     return labels
 
-def one_hot_labels(labels):
+def create_one_hot_labels(labels):
     """
+    Args: take an 2d array [num_frames, 1] and converts them in one hot labels.
+    Return: 2d array [num_frames, n] with n the number of discrete options.
     create labels [1], [3] into labels [0100], [0001].
     of np arrays
     """
     # get maximum ~ number of columns
-    mx = int(max(labels))
-    oh_labels = np.zeros([len(labels), mx+1])
-    #print oh_labels.shape
-    for i in range(len(labels)):
-        oh_labels[i,int(labels[i])]=1
+    mx = int(max(max(labels)))
+    oh_labels = np.zeros([labels.shape[0], mx+1])
+    for i in range(labels.shape[0]):
+        oh_labels[i, int(labels[i,0])]=1
     return oh_labels
 
 def get_labels_from_file(directory):
     """
     read out the labels from a txt control file.
-    first 10 ints are the index -space- 6 floats defining the twist
+    first 10 ints are the index -space- 6 floats defining the twist or 41 bits in case of discrete
     """
     filename=join(directory,"control_info.txt")
     if not os.path.isfile(filename):
@@ -124,10 +136,8 @@ def get_labels_from_file(directory):
     list_f = open(filename,'r')
     # read lines in a list
     list_c = list_f.readlines()
-    
     # cut the newline at the end
     list_c = [l[:-1] for l in list_c]
-    
     # cut the 10 continuous floats label in the beginning
     list_c = [l[10:] for l in list_c]
     
@@ -135,11 +145,24 @@ def get_labels_from_file(directory):
     labels = np.zeros([int(len(list_c)), len(re.findall("\s*\S+", list_c[0]))])
     for i in range(len(list_c)):
         #print i,': ', len(re.findall("\s*\S+", list_c[i])), ' : ',re.findall("\s*\S+", list_c[i])
-        f=[float(s) for s in re.findall("\s*\S+",list_c[i])]
-        labels[i,:]=np.array(f)
+        lbl_l=[float(s) for s in re.findall("\s*\S+",list_c[i])]
+        lbl = []
+        for f in lbl_l:
+        	if abs(f) > 1 and f > 0:
+        		lbl.append(1)
+        	elif abs(f) > 1 and f < 0:
+        		lbl.append(-1)
+        	else:
+        		lbl.append(f)
+        labels[i,:]=np.array(lbl)
+    
     # in case of normal inception features: RGB is only every second label:
     if FLAGS.network == 'inception':#and not FLAGS.feature_type == both
         labels=labels[range(1,len(list_c),2)]
+    
+    # use only the 2 numbers that are not 0.8 or 0 as labels 
+    if FLAGS.short_labels:
+    	labels=labels[:,[2,5]]
     return labels
 
 def prepare_data(data_objects):
@@ -171,20 +194,14 @@ def prepare_data(data_objects):
     # loop over trajectories
     for data_object in data_objects:
         directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
-        if FLAGS.continuous:
+        #real labels from file or from RGB-directory
+        if FLAGS.read_from_file:
             labels_obj = get_labels_from_file(directory)
         else:
-            if FLAGS.one_hot:
-                labels_string_list=get_labels(directory)
-                label_bin_list = []
-                for label in labels_string_list:
-                    label_bin = np.asarray([int(l) for l in label[:]])
-                    label_bin_list.append(label_bin)
-                labels_obj = np.asarray(label_bin_list)
-                print "labels_shape: ", labels_obj.shape
-            else:
-                labels_obj = one_hot_labels(get_labels(directory))
-        
+            labels_obj = get_labels_from_directory(directory)
+        if not FLAGS.one_hot:
+            labels_obj = create_one_hot_labels(labels_obj)
+            
         #import pdb; pdb.set_trace()
         minfeat = labels_obj.shape[0]# see that labels, app and flow features are from the same number of frames
         feats_obj = []        
@@ -209,11 +226,15 @@ def prepare_data(data_objects):
             #check out the features of value -1 and remove these features + labels from the list
             # Assume that if stijns depth estimate is used this is in front of the array of feature types
             for i in range(feats_obj.shape[0]):
-                if feats_obj[i,0] != -1 or feats_obj[i,1] != -1 or feats_obj[i,2] != -1:
+                if not (feats_obj[i,0] == -1 and feats_obj[i,1] == -1 and feats_obj[i,2] == -1) and not (feats_obj[i,0] == 0 and feats_obj[i,1] == 0 and feats_obj[i,2] == 0):
                     rgb_indices.append(i)
             #print 'rgb indices: ',rgb_indices
-            feats_obj=feats_obj[rgb_indices,:]
-            labels_obj=labels_obj[rgb_indices,:]
+            try:
+	        feats_obj=feats_obj[rgb_indices,:]
+	        labels_obj=labels_obj[rgb_indices,:]
+    	    except IndexError:
+    	        print 'IndexError: ',rgb_indices[-1],'>=',min([labels_obj.shape[0], feats_obj.shape[0]])
+        
         #import pdb;pdb.set_trace()
 
         # make them equal lenght: might have missed out some label/feature        
@@ -302,7 +323,8 @@ def prepare_data_grouped(data_objects):
     differences = np.array(differences, dtype=dtype)
     differences = np.sort(differences, order='difference')
     #print differences
-    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(50/FLAGS.sample)]
+    ### ! changed minimum difference from 50 to 100 !
+    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(100/FLAGS.sample)]
     #print split_indices
     
     # create a list of groups (lists) of movies which length  differs more than 50 frames
@@ -420,14 +442,16 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
     '''create batches of different windowsizes for training different unrolled models.
     The batches are picked randomly from all the datalist. The batch and window sizes are defined in the arguments.
     Args:
-        data_list: the data list containing tuples with data and labels of batches (of equal size)
+        data_list: the data list containing tuples with data and labels of batches (of equal length) [works with listed data?]
         windowsizes: a list with the windowsizes needed corresponding to the list of unrolled networks to be trained
         batchsizes: a list of batchsizes for each window set according to the scale factor depending on the size of your RAM and GPU mem
     Return:
-        windowed_data: a list of tuples with each tuple the according windowsize and batchsize as set by the arguments. The data is picked randomly from the data list. 
-        indices: a list of arrays corresponding to the structure of the windowed data only without the tuples.
-        Each element in the list is a array with sets of movie-indices. Every set of movie indices is an array of 3 numbers:
-        [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
+        windowed_data: a nested list of lists of tuples with each tuple the according windowsize and batchsize as set by the arguments. [DEPRECATED]
+        indices: a nested list of lists of tuples with each tuple the according indices for chosen group, chosen batch, chosen timestep. 
+        			The data is picked randomly from the data list. The outer list corresponds to the number of windowsizes/models.
+        			The innerlist is the amount of times a window batch is picked in order to correspond to 1 epoch. This depends of the amount of data.
+        			Each element in the list is a array with sets of movie-indices. Every set of movie indices is an array of 3 numbers:
+        			[tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
         
     '''
     feature_size = data_list[0][0].shape[2]
@@ -435,36 +459,32 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
     #print 'feature_size: ', feature_size
     #print 'output_size: ', output_size
     
-    # go from big to small windowsize and only pick a movie sequence that is not used yet(?)
-    #windowed_data = []
-    indices = []
-    for wsize in reversed(window_sizes):
-        #see how many movies of this windowsize are needed
-        batch_size = batch_sizes[window_sizes.index(wsize)]
-        #data = [] #np.zeros((batchsize, wsize, feature_size))
-        #labels = [] #np.zeros((batchsize, wsize, output_size))
-        w_indices = [] #the set of indices for the batch of this window size
-        # make a list of indices pointing to batch_tuples with movies from which you can pick a window of this size randomly
-        inds = [i for i in range(len(data_list)) if data_list[i][0].shape[1] > wsize]
-        while len(w_indices) != batch_size:
-            #import pdb; pdb.set_trace()
-            # choose batch tuple to pick a window randomly
-            tup_ind = random.choice(inds)
-            # choose movie in this batch randomly
-            mov_ind = random.choice(range(data_list[tup_ind][0].shape[0]))
-            # choose starting position of the window in this movie randomly
-            start_ind = random.choice(range(data_list[tup_ind][0].shape[1]-wsize))
-            #data.append(np.asarray([data_list[tup_ind][0][mov_ind][start_ind:start_ind+wsize][:]]))
-            #labels.append(np.asarray([data_list[tup_ind][1][mov_ind][start_ind:start_ind+wsize][:]]))
-            w_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
-        #data=np.concatenate(data)
-        #labels=np.concatenate(labels)
-        w_indices=np.concatenate(w_indices)
-        indices.insert(0, w_indices) #insert the indices of this wsize batch
-        #windowed_data.insert(0, (data, labels))
-    #import pdb; pdb.set_trace()    
-    #return windowed_data, indices
-    return indices
+    ##preparation = define number of times the windowed-batched data should be iterated in one epoch
+    if len(window_sizes) != len(batch_sizes):
+    	raise SyntaxError('Number of windowsizes is not equal to number of batchsizes.')
+    	
+    b_num_frames = sum([ window_sizes[i] * batch_sizes[i] for i in range(len(window_sizes))])
+    d_num_frames = sum([ data_list[t][0].shape[0]*data_list[t][0].shape[1] for t in range(len(data_list))])
+    b_scale = max([1, int(d_num_frames/b_num_frames)]) #number of times the window-batches are repeated in one epoch
+    print "multiply window batches ",b_scale," times in one epoch."
+    total_indices = [] #to be returned in the end
+    for wi in range(len(window_sizes)):#outer list over models
+    	#create list of tuples of movie and batch indices with movies longer than the required size
+    	possible_movies=[ (ti, bi) for ti in range(len(data_list)) for bi in range(data_list[ti][0].shape[0]) if data_list[ti][0].shape[1] > window_sizes[wi]]
+    	#print possible_movies
+    	if len(possible_movies) == 0:
+    		raise SyntaxError('Windowsize '+str(window_sizes[wi])+' is too big for this set of data ['+str(max([data_list[i][0].shape[1] for i in range(len(data_list))]))+' max]. Consider using fully unrolled option with --batchwise_learning True.')
+    	local_indices = [] #list of length b_scale with tuples corresponding to this window size
+    	for li in range(b_scale):
+    		b_indices = [] #an array of indices for 1 batch for this window size
+    		for bi in range(batch_sizes[wi]):
+    			tup_ind, mov_ind = random.choice(possible_movies)
+    			start_ind = random.choice(range(data_list[tup_ind][0].shape[1]-window_sizes[wi]))
+    			b_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
+    		b_indices = np.concatenate(b_indices)
+    		local_indices.append(b_indices)
+    	total_indices.append(local_indices)
+    return total_indices
 
 def copy_windows_from_data(data_list, window_size, indices):
     ''' create batch of window_size length
@@ -506,12 +526,20 @@ if __name__ == '__main__':
     #print result_data
     #mylist=prepare_data_grouped(data_objects, feature_type='app', sample_step=8)
     #print type(mylist)
-
-    #training_objects, validate_objects, test_objects = get_objects(dataset)
-    #testset = prepare_data_list(test_objects, feature_type='both')
-    #validationset = prepare_data_list(validate_objects, feature_type='both')
-    #trainingset = prepare_data_grouped(training_objects, feature_type='app', sample_step=16)
+    FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
+    #FLAGS.dataset='generated'
+    FLAGS.sample = 1
+    #training_objects, validate_objects, test_objects = get_objects()
+    #testset = prepare_data_list(test_objects)
+    #validationset = prepare_data_list(validate_objects)
+    #trainingset = prepare_data_grouped(training_objects)
+    trainingset = prepare_data_list(['0000'])
     
+    window_sizes=[1]
+    batch_sizes=[10]
+    
+    indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
+    import pdb; pdb.set_trace()
     #print type(trainingset)
     
     #training_data, training_labels = prepare_data(training_objects, sample_step=100, feature_type='both')

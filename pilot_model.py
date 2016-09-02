@@ -134,7 +134,8 @@ class LSTMModel(object):
                     if self._num_steps == 1: self._state = state # if only 1 step is taken, the state is not saved yet.
                     # make it a nice tensor of shape [batch_size, num_steps*hidden_size]
                     # reshape so each row correspond to 1 output of hidden_size length
-                    output = tf.reshape(tf.concat(1, outputs), [-1, hidden_size])
+                    # [b0t0, b0t1, ..., b0tn, b1t0, b1,t1, ... b1tn, ... bst0, ...] with n num steps and s batchsize
+                    self._output = tf.reshape(tf.concat(1, outputs), [-1, hidden_size])
                     self._states = tf.concat(1,states)
                     #import pdb; pdb.set_trace()
                 
@@ -152,15 +153,15 @@ class LSTMModel(object):
                 with tf.device(device_name):
                     weights = tf.get_variable("weights", [hidden_size, hidden_size])
                     biases = tf.get_variable('biases', [hidden_size])
-                    output = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
+                    self._output = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
         # Add a softmax layer mapping the output to 4 logits defining the network
         with tf.name_scope(self._prefix+'_softmax_linear'):
             with tf.device(device_name):
                 weights = tf.get_variable("weights",[hidden_size, output_size])        
                 biases = tf.get_variable('biases', [output_size])
-                # [?, output_size]=[?, hidden_size]*[hidden_size, output_size]
-                # with ? = num_steps * batch_size
-                logits = tf.matmul(output, weights) + biases
+                # [?, ouput_size]=[?, hidden_size]*[hidden_size, output_size]
+                # with ? = num_steps * batch_size (b0t0, b0t1, ..., b1t0, b1t1, ...)
+                logits = tf.matmul(self._output, weights) + biases
             
             # Add summary ops to collect data
             self.w_hist = tf.histogram_summary(self._prefix+"_weights", weights)
@@ -202,7 +203,12 @@ class LSTMModel(object):
                             [tf.ones([self.batch_size*self.num_steps])]) #weights
                         loss = tf.reduce_sum(loss)/self.batch_size
                 else: #continuous
-                    loss = tf.reduce_sum(tf.square(tf.reshape(self.targets,[self.batch_size*self._num_steps, output_size]) - self.logits))
+                	#needs to be debugged!
+                    #loss = tf.reduce_sum(tf.square(tf.sub(tf.reshape(self.targets,[self.batch_size*self._num_steps, output_size]), self.logits)))
+                    #self._rsh_lgts = tf.reshape(self.logits, [self._batch_size, self._num_steps, output_size])
+                    #self._loss_wild = tf.square(tf.sub(self.targets, self.rsh_lgts))
+                    #self._loss_wild = tf.sqrt(tf.reduce_sum(tf.square(tf.sub(self.targets, tf.reshape(self.logits, [self._batch_size, self._num_steps, output_size]))),reduction_indices=2))
+                    loss = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(tf.sub(self.targets, tf.reshape(self.logits, [self._batch_size, self._num_steps, output_size]))),reduction_indices=2)))
             
             
             #add scalar for collecting data
@@ -316,7 +322,16 @@ class LSTMModel(object):
     @property
     def states(self):
         return self._states
-
+        
+    @property
+    def output(self):
+        return self._output
+    @property
+    def loss_wild(self):
+        return self._loss_wild
+    @property
+    def rsh_lgts(self):
+        return self._rsh_lgts
     @property
     def train_op(self):
         return self._train_op

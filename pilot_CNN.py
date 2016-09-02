@@ -61,7 +61,7 @@ tf.app.flags.DEFINE_string(
     """Path to data where images are saved online. This is the source directory for the network.""")
 
 tf.app.flags.DEFINE_string(
-    'movie',"",
+    'chosen_set',"",
     """Define from which movie in remote_images pilot_CNN needs to extract the features"""
     )
 
@@ -87,9 +87,15 @@ def extract_offline():
     pretrained on imagenet.
     '''
     #chosen_set='wall_expert_fixed'
-    chosen_set='dagger2'
+    if len(FLAGS.chosen_set) != 0:
+        chosen_set=FLAGS.chosen_set
+    else:
+        chosen_set='dagger2'
+    
     movies_dir=FLAGS.data_dir_offline+chosen_set
-    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
+    
+    movies=['0079','0080','0081','0082','0083','0084','0085','0086','0087','0088','0089','0090','0091','0092','0093','0094','0095']
+    #movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
     #if len(FLAGS.movie) != 0:
         #movies = [FLAGS.movie]
     #else:

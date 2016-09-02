@@ -8,17 +8,17 @@
 #                model bwise fc step_size_fnn ftype network wsize bsize sample log_tag
 
 #./condor_task.sh cont False False 1 app inception 0 100 1 no_test
-./condor_task.sh cont False False 1 depth_estimate_normalized stijn 0 100 1 no_test
+#./condor_task.sh cont False False 1 depht_estimate stijn 0 100 1 no_test
 
 #./condor_task.sh cont True False 1 app inception 0 100 16 no_test
 #./condor_task.sh cont False True 1 app inception 0 100 1 no_test
-./condor_task.sh cont False True 2 app inception 0 100 1 no_test
-./condor_task.sh cont False True 4 app inception 0 100 1 no_test
+#./condor_task.sh cont False True 2 app inception 0 100 1 no_test
+#./condor_task.sh cont False True 4 app inception 0 100 1 no_test
 
-#./condor_task.sh cont True False 1 depth_estimate_normalized stijn 0 100 16 no_test
-./condor_task.sh cont False True 1 depth_estimate_normalized stijn 0 100 1 no_test
-#./condor_task.sh cont False True 2 depth_estimate_normalized stijn 0 100 1 no_test
-#./condor_task.sh cont False True 4 depth_estimate_normalized stijn 0 100 1 no_test
+#./condor_task.sh cont True False 1 depht_estimate stijn 0 100 16 no_test
+#./condor_task.sh cont False True 1 depht_estimate stijn 0 100 1 no_test
+#./condor_task.sh cont False True 2 depht_estimate stijn 0 100 1 no_test
+#./condor_task.sh cont False True 4 depht_estimate stijn 0 100 1 no_test
 
 # ./condor_task.sh cwall False False 1 app inception 1 500 1 no_test
 # ./condor_task.sh cwall False False 1 app inception 5 100 1 no_test
@@ -36,15 +36,30 @@
 #./condor_task.sh big pcnn flow
 # adapt network and feature type in default values of pilot code
 
-##STEP 2: see how small you can make the prefered model
-##              model hsize
-#./condor_task.sh big 30
-#./condor_task.sh big 20
-# ./condor_task.sh big 10
-# ./condor_task.sh big 5
-# ./condor_task.sh big 3
-# ./condor_task.sh big 2
-# ./condor_task.sh big 1
+##DAGGER 1
+#./condor_task.sh dagger False False 1 app inception 0 100 1 d1 /esat/qayd/kkelchte/tensorflow/lstm_logs/cont
+#./condor_task.sh dagger False False 1 depth_estimate stijn 0 100 1 d1 /esat/qayd/kkelchte/tensorflow/lstm_logs/cont_net_stijn_depth
+#./condor_task.sh dagger False True 1 depth_estimate stijn 0 100 1 d1 /esat/qayd/kkelchte/tensorflow/lstm_logs/cont_batchwise_net_stijn_depth_fc
+#./condor_task.sh dagger False True 1 app inception 0 100 1 d1 /esat/qayd/kkelchte/tensorflow/lstm_logs/cont_batchwise_fc
+
+##STEP 1: choose learning rate
+##              model learningrate
+#./condor_task.sh cont 0.000001
+#./condor_task.sh cont 0.00001
+#./condor_task.sh cont 0.0001
+#./condor_task.sh cont 0.001
+#./condor_task.sh cont 0.01
+#./condor_task.sh cont 0.1
+#./condor_task.sh cont 1
+
+##STEP 2: choose hidden size
+##              model hidden window batch
+./condor_task.sh cont 20 100 1
+./condor_task.sh cont 50 100 1
+./condor_task.sh cont 100 100 1
+./condor_task.sh cont 200 100 1
+
+
 ## adapt size in default values of pilot code
 
 # ./condor_task.sh big 0.001

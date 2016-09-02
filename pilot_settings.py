@@ -35,7 +35,7 @@ def extract_logfolder():
     try:#only runs this when these values are actually set
         if not FLAGS.random_order: 
             logfolder = logfolder + "_rndmordr_"+ str(FLAGS.random_order)
-        if FLAGS.learning_rate != 0.001:
+        if FLAGS.learning_rate != 0.0001:
             if FLAGS.learning_rate < 1:
                 lr = str(FLAGS.learning_rate)[2:]
                 lr = "0" + lr
@@ -49,14 +49,14 @@ def extract_logfolder():
         if FLAGS.batchwise_learning:
             logfolder = logfolder + "_batchwise"
         if FLAGS.window_size != 0:
-        	logfolder = logfolder + "_wsize_"+str(FLAGS.window_size)
+            logfolder = logfolder + "_wsize_"+str(FLAGS.window_size)
     except AttributeError:
         #in case you are not training... these values wont be set
         print "some flags were not found...probably in pilot_train."
     if FLAGS.num_layers != 2:
         logfolder = logfolder + "_nlayers_"+ str(FLAGS.num_layers)
-    if FLAGS.hidden_size != 100:
-        logfolder = logfolder + "_sz_"+ str(FLAGS.hidden_size)
+    if FLAGS.hidden_size != 100: ###change this back to default when hiddensize is chosen
+        logfolder = logfolder + "_hsz_"+ str(FLAGS.hidden_size)
     if FLAGS.keep_prob != 1.0: 
         kp = str(FLAGS.keep_prob)[2:]
         kp = "0" + kp
@@ -71,7 +71,7 @@ def extract_logfolder():
     if FLAGS.fc_only: 
         logfolder = logfolder + "_fc"
     if FLAGS.step_size_fnn != 1:
-    	logfolder = logfolder + "_stp_"+str(FLAGS.step_size_fnn)
+        logfolder = logfolder + "_stp_"+str(FLAGS.step_size_fnn)
         
     return logfolder
 
@@ -89,40 +89,37 @@ class Configuration:
 
 class SmallConfig(Configuration):
     """small config, for testing."""
-    training_objects = ['modelbaa_one_cw','modelaba_one_cw','modelbee_one_cw']#,'modelfee']
-    #training_objects = ['modelaaa_one_cw']
-    validate_objects = ['modelaaa_one_cw']
-    test_objects = ['modelaaa_one_cw']
+    training_objects = ['0000','0010']#['0035'],'0025',#,'modelfee']
+    validate_objects = ['0000']
+    test_objects = ['0000']
     
     def __init__(self):
-        FLAGS.sample = 16
+    	FLAGS.sample = 10
         FLAGS.num_layers = 1
-        FLAGS.hidden_size = 2 #dimensionality of cell state and output
+        FLAGS.hidden_size = 10 #dimensionality of cell state and output
         FLAGS.max_epoch = 5
-        FLAGS.max_max_epoch = 1 #5
-        FLAGS.feature_type = 'app' #flow or app or both
-        FLAGS.network='inception'
+        FLAGS.max_max_epoch = 10 #5
+        #FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
+        #FLAGS.network='stijn' #'inception'
+        FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
         
-class RemoteConfig(Configuration):
-    """remote config, for images from laptop with oa."""
-    training_objects = ['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
-    #training_objects = ['set_6']
-    validate_objects = ['set_6']
-    test_objects = ['set_6']
+        
+class DiscreteConfig(Configuration):
+    """discrete labels for the OA challenge."""
+    training_objects = ['0000'] #['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
+    validate_objects = ['0001']
+    test_objects = ['0002']
     
     def __init__(self):
-        FLAGS.sample = 1
-        FLAGS.hidden_size = 100 #dimensionality of cell state and output
         FLAGS.max_epoch = 15 #50
-        FLAGS.max_max_epoch =   30 #100
+        FLAGS.max_max_epoch = 30 #100
         #FLAGS.hidden_size = 10 #dimensionality of cell state and output
         #FLAGS.max_epoch = 2
         #FLAGS.max_max_epoch = 5
-        FLAGS.dataset='../../tmp/remote_images'
-        FLAGS.one_hot=True
-        FLAGS.log_tag='set7_fc'
-        FLAGS.data_type = "batched"
-
+        FLAGS.continuous= False
+        FLAGS.dataset='../../../emerald/tmp/remote_images/discrete_expert_2'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
 class ContinueConfig(Configuration):
     """continue config, for images from laptop with oa."""
     training_objects = ['0000']
@@ -130,18 +127,24 @@ class ContinueConfig(Configuration):
     test_objects = ['0003']
         
     def __init__(self):
-        FLAGS.hidden_size = 100 #dimensionality of cell state and output
-        FLAGS.max_epoch = 50 #15
-        FLAGS.max_max_epoch =   100 #30
-        FLAGS.data_type = "grouped"
-        #FLAGS.hidden_size = 10 #dimensionality of cell state and output
-        #FLAGS.max_epoch = 2
-        #FLAGS.max_max_epoch = 5
+        FLAGS.max_epoch = 50 #50 #15 # let the learning rate decay faster
+        FLAGS.max_max_epoch = 100 # 100 #30
         FLAGS.dataset='../../../emerald/tmp/remote_images/continuous_expert'
-        FLAGS.one_hot=True
-#        FLAGS.log_tag='continue'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        FLAGS.continuous = True
+
+class DaggerConfig(Configuration):
+    """dagger config points to the huge dataset"""
+    training_objects = ['0000']
+    validate_objects = ['0001']
+    test_objects = ['0002']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 15
+        FLAGS.max_max_epoch = 100 #30
+        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        #FLAGS.finetune = True
+        #FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/???'
 
 class WallConfig(Configuration):
     """wall config, small set for testing memory stretching"""
@@ -150,15 +153,15 @@ class WallConfig(Configuration):
     test_objects = ['0002_1']
         
     def __init__(self):
-        FLAGS.hidden_size = 100 #dimensionality of cell state and output
         FLAGS.max_epoch = 50 #15
-        FLAGS.max_max_epoch =  100 #30
-        FLAGS.data_type = "grouped"
-        FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert_fixed'
+        FLAGS.max_max_epoch =  200 #30
+        FLAGS.window_size = 100
+        FLAGS.batch_size_fnn = 32
+        FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        FLAGS.one_hot=True
-        FLAGS.continuous = True    
-
+        #FLAGS.finetune= True
+        #FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/cwall_testing_wsize_100'
+        
 class LogitsConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
     #training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
@@ -227,20 +230,20 @@ def get_config():
         config = DumpsterConfig()
     elif FLAGS.model == "test":
         config = TestConfig()
-    elif FLAGS.model == "remote":
-        config = RemoteConfig()
+    elif FLAGS.model == "dis":
+        config = DiscreteConfig()
     elif FLAGS.model == "cont":
         config = ContinueConfig()
     elif FLAGS.model == "cwall":
         config = WallConfig()
+    elif FLAGS.model == "dagger":
+        config = DaggerConfig()
     else:
         config = Configuration()
     # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN
     # this means FLAGS.fc_only is true and the default values change
-    if FLAGS.fc_only:
-        FLAGS.batchwise_learning = True
-        FLAGS.max_epoch = 2*FLAGS.max_epoch
-        FLAGS.max_max_epoch =  2*FLAGS.max_max_epoch
+    if FLAGS.fc_only: #data is extracted in the same way as normal time-window-batches but with window size 1.
+        FLAGS.batchwise_learning = False
         
     return config
 if __name__ == '__main__':

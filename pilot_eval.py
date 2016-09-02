@@ -4,6 +4,7 @@
 import pilot_model
 import pilot_data
 import pilot_settings
+import convert_control_output
 
 import time
 import tensorflow as tf
@@ -16,6 +17,7 @@ import pyinotify
 import os, shutil
  
 import matplotlib.pyplot as plt
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -125,41 +127,45 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
         sio.savemat(matfile,d, appendmat=True)
         
     if verbose:
-        print "Accuracy: ",(score/iters)
-        print "Average Loss: ",(costs/iters)   
+        if not FLAGS.continuous: print "Accuracy: ",(score/iters)
+        else: print "Average Loss: ",(costs/iters)   
     ##Add call for tensor accuracy + write it away
-    return score, costs, iters
+    #loss is an average in case of numstep unrolled but not yet in case of one step unrolled.
+    return score, (costs/iters), iters
 
 def get_initial_states(models, indices, meval, data_list, sess):
-    '''Set the needed initial states for the models to be trained according to the beginning parts of the movies for windowwise training. Use a seperate session in order to keep the memory at low level.
+    '''Get the needed initial states for the models to be trained according to the beginning parts of the movies for windowwise training. 
+    Use a seperate session in order to keep the memory at low level.
     Args:
         models: training models of which model.initial_state has to be set.
         indices: the tuple/mov/start indices indicating the training window for that batch.
         meval: the evaluation (validation) model used.
         data_list: the original list of grouped tuples according to movie lengths
     Return:
-        resulting states (for debugging purpose)
+        resulting states listed up in nested lists: the outer list corresponding to the number of models
+        the inner list corresponding to the number of times a window batch is applied in one epoch.
     '''
     initial_states_all = []
     for im in range(len(models)):#index for model
         model = models[im]
         zerostate = sess.run(model.initial_state)
         #print 'zerostate: ',zerostate
-        initial_states = np.zeros(zerostate.shape)
-        #print 'initial_states: ',initial_states
-        for ib in range(indices[im].shape[0]):#index of movie in batch
-            [tup_ind, mov_ind, start_ind] = indices[im][ib] #get indices needed for finding data
-            state = sess.run(meval.initial_state) #initialize eval network with zero state
-            for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
-                feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
-                            meval.initial_state: state}
-                outputs, state = sess.run([meval.logits, meval.state], feed_dict)
-            initial_states[ib]=state
-        initial_states_all.append(initial_states)
-        #print 'initial_states: ',initial_states
-        #sess.run(tf.assign(model.initial_state, initial_states))
-        #import pdb; pdb.set_trace()
-        #model.initial_state = np.asarray(initial_states)
+        initial_states_local = [] #list for each time a batch-window is applied in one epoch
+        for il in range(len(indices[im])):
+        	initial_states = np.zeros(zerostate.shape)
+        	#print 'initial_states: ',initial_states
+        	for ib in range(indices[im][il].shape[0]):#index of movie in batch
+        		#import pdb; pdb.set_trace()
+        	    [tup_ind, mov_ind, start_ind] = indices[im][il][ib] #get indices needed for finding data
+        	    state = sess.run(meval.initial_state) #initialize eval network with zero state
+        	    for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
+        	        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
+        	                    meval.initial_state: state}
+        	        outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+        	        #state = sess.run([meval.state], feed_dict)
+        	    initial_states[ib]=state
+        	initial_states_local.append(initial_states)
+        initial_states_all.append(initial_states_local)
     return initial_states_all
     
 def evaluate(logfolder, config, scope="model"):
@@ -182,10 +188,11 @@ def evaluate(logfolder, config, scope="model"):
             writer = tf.train.SummaryWriter(location, graph=session.graph)
             #decide of what movies you want to keep track.
             movies_to_write_away = [0]
-            acc = 0.0
-            per = 0.0
-            acc_max = 0.0
-            acc_min = 1.0
+            #acc = 0.0
+            #per = 0.0
+            #acc_max = 0.0
+            #acc_min = 1.0
+            test_results = []
             for j in range(len(test_data_list)):
                 if j in movies_to_write_away: wrtr = writer
                 else: wrtr = None
@@ -200,19 +207,28 @@ def evaluate(logfolder, config, scope="model"):
                                             test_data_list[j][1], 
                                             tf.no_op(),
                                             writer=wrtr,
-                                            verbose=True)
-                perplexity = np.exp(results[1] / results[2])
-                accuracy = results[0]/results[2]
-                print("Accuracy: %.3f" % (accuracy))
-                if acc_max < accuracy: acc_max = accuracy
-                if acc_min > accuracy: acc_min = accuracy
-                acc = acc+accuracy/len(test_data_list)
-                per = per+perplexity/len(test_data_list)
-                print("Test perplexity: %.3f" %perplexity)
-            print 'average accuracy: ',acc
-            print 'max accuracy: ',acc_max
-            print 'min accuracy: ',acc_min
-            print 'average perplexity: ',per
+                                            verbose=False)
+                test_results.append(results)
+                #perplexity = np.exp(results[1] / results[2])
+                #accuracy = results[0]/results[2]
+                #print("Accuracy: %.3f" % (accuracy))
+                #if acc_max < accuracy: acc_max = accuracy
+                #if acc_min > accuracy: acc_min = accuracy
+                #acc = acc+accuracy/len(test_data_list)
+                #per = per+perplexity/len(test_data_list)
+                #print("Test perplexity: %.3f" %perplexity)
+            if not FLAGS.continuous:
+                accuracies = [mres[0] for mres in test_results]
+                losses = [mres[1] for mres in test_results]
+                print("Test: Average Accuarcy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
+            else:#continuous case
+                losses = [mres[1] for mres in test_results]
+                print("Test: Average loss over different unrolled models: %f, Max: %f, Min: %f." % (sum(losses)/len(losses),max(losses),min(losses)))
+                
+            #print 'average accuracy: ',acc
+            #print 'max accuracy: ',acc_max
+            #print 'min accuracy: ',acc_min
+            #print 'average perplexity: ',per
     print 'evaluation...finished!'
 
 def evaluate_online(logfolder, config, scope="model"):
@@ -256,7 +272,8 @@ def evaluate_online(logfolder, config, scope="model"):
             location = logfolder+"/eval"
             writer = tf.train.SummaryWriter(location, graph=session.graph)
             #get the shape of the inner state of the model
-            local_state = session.run(mtest.initial_state)
+            if not FLAGS.fc_only:
+                local_state = session.run(mtest.initial_state)
             #initial_state = np.zeros(prestate.shape)
             #assign zeros to the initial state of the model
             #session.run(tf.assign(mtest.initial_state, initial_state))
@@ -297,15 +314,28 @@ def evaluate_online(logfolder, config, scope="model"):
                         #plt.matshow(np.transpose(np.reshape(feature, (74,55))))
                         #plt.show()
                         # Define evaluate 1step unrolled
-                        feed_dict = {mtest.inputs: feature, 
+                        if FLAGS.fc_only:
+                            feed_dict = {mtest.inputs: feature}
+                            outputs= session.run([mtest.logits],feed_dict)
+                        else:
+                            feed_dict = {mtest.inputs: feature, 
                                 mtest.initial_state: local_state}
-                        outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
+                            outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
                         last_feature='%s' % current_feature # copy string object
                         #writer.add_summary(summary_str, f)
+                        #import pdb; pdb.set_trace()
                         if FLAGS.continuous:
-                            output_str = str(outputs[0])[1:-1]
+                            output_str = str(outputs[0])[1:-1] #get the brackets off
+                            if FLAGS.fc_only:#Still needs to be tested!!
+                                output_str=re.sub('\n','',output_str)
+                                output_str=output_str[1:-1]
                         else:
-                            output_str = str(np.argmax(outputs))
+                            #output_str = str(np.argmax(outputs))
+                            if outputs.shape[0]%2 == 0:
+                                raise SyntaxError('disc_factor is wrong: '+str((outputs.shape[0]+1)/2))
+                            disc_factor=int((outputs.shape[0]+1)/2)
+                            max_index = np.argmax(outputs)
+                            output_str=convert_control_output.translate_index(max_index, disc_factor)
                         print 'output: ', output_str
                         #import pdb;pdb.set_trace()
                         
