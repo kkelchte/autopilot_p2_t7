@@ -50,6 +50,10 @@ def extract_logfolder():
             logfolder = logfolder + "_batchwise"
         if FLAGS.window_size != 0:
             logfolder = logfolder + "_wsize_"+str(FLAGS.window_size)
+        if FLAGS.finetune:
+            logfolder = logfolder + "_fi"
+        if FLAGS.skip_initial_state:
+            logfolder = logfolder + "_no_init_state"
     except AttributeError:
         #in case you are not training... these values wont be set
         print "some flags were not found...probably in pilot_train."
@@ -89,49 +93,21 @@ class Configuration:
 
 class SmallConfig(Configuration):
     """small config, for testing."""
-    training_objects = ['0000','0010']#['0035'],'0025',#,'modelfee']
+    training_objects = ['0000','0010','0035','0025']
     validate_objects = ['0000']
     test_objects = ['0000']
     
     def __init__(self):
-    	FLAGS.sample = 10
+        FLAGS.max_num_windows = 1000 
+        FLAGS.sample = 10
         FLAGS.num_layers = 1
         FLAGS.hidden_size = 10 #dimensionality of cell state and output
-        FLAGS.max_epoch = 5
-        FLAGS.max_max_epoch = 10 #5
+        FLAGS.max_epoch = 1
+        FLAGS.max_max_epoch = 2
         #FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
         #FLAGS.network='stijn' #'inception'
         FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
         
-        
-class DiscreteConfig(Configuration):
-    """discrete labels for the OA challenge."""
-    training_objects = ['0000'] #['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
-    validate_objects = ['0001']
-    test_objects = ['0002']
-    
-    def __init__(self):
-        FLAGS.max_epoch = 15 #50
-        FLAGS.max_max_epoch = 30 #100
-        #FLAGS.hidden_size = 10 #dimensionality of cell state and output
-        #FLAGS.max_epoch = 2
-        #FLAGS.max_max_epoch = 5
-        FLAGS.continuous= False
-        FLAGS.dataset='../../../emerald/tmp/remote_images/discrete_expert_2'
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        
-class ContinueConfig(Configuration):
-    """continue config, for images from laptop with oa."""
-    training_objects = ['0000']
-    validate_objects = ['0002']
-    test_objects = ['0003']
-        
-    def __init__(self):
-        FLAGS.max_epoch = 50 #50 #15 # let the learning rate decay faster
-        FLAGS.max_max_epoch = 100 # 100 #30
-        FLAGS.dataset='../../../emerald/tmp/remote_images/continuous_expert'
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-
 class DaggerConfig(Configuration):
     """dagger config points to the huge dataset"""
     training_objects = ['0000']
@@ -140,12 +116,44 @@ class DaggerConfig(Configuration):
         
     def __init__(self):
         FLAGS.max_epoch = 15
-        FLAGS.max_max_epoch = 100 #30
+        FLAGS.max_max_epoch = 30
+        FLAGS.max_num_windows = 2000 
+        #FLAGS.sliding_window = True
+        #FLAGS.skip_initial_state = True
+        if FLAGS.fc_only:
+            FLAGS.hidden_size = 400
         FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        #FLAGS.finetune = True
-        #FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/???'
 
+class CombConfig(Configuration):
+    """comb config points to the huge dataset and goes over it with different window sizes"""
+    training_objects = ['0000']
+    validate_objects = ['0001']
+    test_objects = ['0002']
+        
+    def __init__(self):
+        # Each epoch is repeated for each window size
+        FLAGS.skip_initial_state = True #should be 210 / (7windowsizes * 3datasets) = 10 in order to get results after 10h on 4G gpu with initial state
+        FLAGS.max_epoch = 1
+        FLAGS.max_max_epoch = 5 
+        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class SelectedConfig(Configuration):
+    """continue config, for images from laptop with oa."""
+    training_objects = ['0011']
+    validate_objects = ['0011']
+    test_objects = ['0011']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 15 # let the learning rate decay faster
+        FLAGS.max_max_epoch = 30
+        FLAGS.max_num_windows = 2000 #Number of initial state calculations each epoch with windowwise learning (100~1min)
+        FLAGS.dataset='../../../emerald/tmp/remote_images/selected'
+        #FLAGS.dataset='../../../emerald/tmp/remote_images/one_world_clean'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+        
 class WallConfig(Configuration):
     """wall config, small set for testing memory stretching"""
     training_objects = ['0000_1']
@@ -153,14 +161,42 @@ class WallConfig(Configuration):
     test_objects = ['0002_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 50 #15
-        FLAGS.max_max_epoch =  200 #30
-        FLAGS.window_size = 100
-        FLAGS.batch_size_fnn = 32
+        FLAGS.max_epoch = 2 #15
+        FLAGS.max_max_epoch =  5 #30
         FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        #FLAGS.finetune= True
-        #FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/cwall_testing_wsize_100'
+        FLAGS.batchwise_learning = True
+
+class WallWindowConfig(Configuration):
+    """wall config, small set for testing memory stretching"""
+    training_objects = ['0010_1','0010_2','0010_3','0010_4']
+    validate_objects = ['0011_1']
+    test_objects = ['0012_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50 #15
+        FLAGS.max_max_epoch =  200 #30
+        FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert'
+
+#### Old configurations        
+class DiscreteConfig(Configuration):
+    """discrete labels for the OA challenge."""
+    training_objects = ['0000'] #['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
+    validate_objects = ['0001']
+    test_objects = ['0002']
+    
+    def __init__(self):
+        FLAGS.max_epoch = 15 #50
+        FLAGS.max_max_epoch = 100
+        #FLAGS.hidden_size = 10 #dimensionality of cell state and output
+        #FLAGS.max_epoch = 2
+        #FLAGS.max_max_epoch = 5
+        FLAGS.continuous= False
+        FLAGS.dataset='../../../emerald/tmp/remote_images/discrete_expert_2'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.finetune = True
+        FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/dis_wsize_300'
+
         
 class LogitsConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
@@ -176,7 +212,6 @@ class LogitsConfig(Configuration):
         FLAGS.learning_rate = 0.01
         training_objects, validate_objects, test_objects = pilot_data.get_objects()
     
-        
 class DumpsterConfig(Configuration):
     """train only on logit data ==> requires a bit a different network"""
     #training_objects = ['modeldaa','modelbae','modelacc','modelbca','modelafa', 'modelaaa']
@@ -224,6 +259,8 @@ def get_config():
         config = BigConfig()
     elif FLAGS.model == "small":
         config = SmallConfig()
+    elif FLAGS.model == "comb":
+        config = CombConfig()
     elif FLAGS.model == "logits":
         config = LogitsConfig()
     elif FLAGS.model == "dumpster":
@@ -232,10 +269,12 @@ def get_config():
         config = TestConfig()
     elif FLAGS.model == "dis":
         config = DiscreteConfig()
-    elif FLAGS.model == "cont":
-        config = ContinueConfig()
+    elif FLAGS.model == "seldat":
+        config = SelectedConfig()
     elif FLAGS.model == "cwall":
         config = WallConfig()
+    elif FLAGS.model == "winwall":
+        config = WallWindowConfig()
     elif FLAGS.model == "dagger":
         config = DaggerConfig()
     else:

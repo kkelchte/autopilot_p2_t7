@@ -51,7 +51,13 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_boolean(
     "short_labels", False,
     "Use only 2 labels, one for up/down, one for left/right.")
-    
+tf.app.flags.DEFINE_integer(
+    "max_num_windows",500,
+    "#define max number of initial_state calculations for one epoch.")
+tf.app.flags.DEFINE_boolean(
+    "sliding_window", False,
+    "Choose whether windows are picked randomly or are sliding over.")
+
 class DataError(Exception):
     def __init__(self, value):
         self.value = value
@@ -220,8 +226,8 @@ def prepare_data(data_objects):
             
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
         #print "shape features:",feats_obj.shape
-    
         if FLAGS.network == 'stijn':
+            #import pdb;pdb.set_trace()
             rgb_indices=[]
             #check out the features of value -1 and remove these features + labels from the list
             # Assume that if stijns depth estimate is used this is in front of the array of feature types
@@ -230,13 +236,10 @@ def prepare_data(data_objects):
                     rgb_indices.append(i)
             #print 'rgb indices: ',rgb_indices
             try:
-	        feats_obj=feats_obj[rgb_indices,:]
-	        labels_obj=labels_obj[rgb_indices,:]
-    	    except IndexError:
-    	        print 'IndexError: ',rgb_indices[-1],'>=',min([labels_obj.shape[0], feats_obj.shape[0]])
-        
-        #import pdb;pdb.set_trace()
-
+                feats_obj=feats_obj[rgb_indices,:]
+                labels_obj=labels_obj[rgb_indices,:]
+            except IndexError:
+                print 'IndexError: ',rgb_indices[-1],'>=',min([labels_obj.shape[0], feats_obj.shape[0]])
         # make them equal lenght: might have missed out some label/feature        
         labels_obj = labels_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
         feats_obj = feats_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
@@ -248,8 +251,7 @@ def prepare_data(data_objects):
         labels.append(labels_obj)
         if min_steps > labels_obj.shape[0]:#get number of frames of shortest movie
             min_steps = labels_obj.shape[0]   
-
-    #import pdb; pdb.set_trace()
+    #import pdb;pdb.set_trace()
     if FLAGS.sample>=min_steps:
         raise DataError("downsampling is larger than total data set "+str(FLAGS.sample)+">="+str(min_steps))
         
@@ -466,6 +468,10 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
     b_num_frames = sum([ window_sizes[i] * batch_sizes[i] for i in range(len(window_sizes))])
     d_num_frames = sum([ data_list[t][0].shape[0]*data_list[t][0].shape[1] for t in range(len(data_list))])
     b_scale = max([1, int(d_num_frames/b_num_frames)]) #number of times the window-batches are repeated in one epoch
+    if FLAGS.max_num_windows > max(batch_sizes):
+        b_scale = min(b_scale, FLAGS.max_num_windows/max(batch_sizes)) #define max number of initial_state calculations for one epoch
+    else:#max_num_windows is set smaller than batch size so don't scale further.
+        b_scale = 1
     print "multiply window batches ",b_scale," times in one epoch."
     total_indices = [] #to be returned in the end
     for wi in range(len(window_sizes)):#outer list over models
@@ -486,6 +492,54 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
     	total_indices.append(local_indices)
     return total_indices
 
+def pick_sliding_windows(data_list, window_sizes, batch_sizes):
+    '''ERROR: SLIDING WINDOW SLIDES ONLY OVER SLIDING WINDOW LENGTH AND NOT FULL SEQUENCE create batches of with windowsizes for training different unrolled models.
+    The batches are slided over different steps in the second dimension.
+    
+    Args:
+        data_list: the data list containing tuples with data and labels of batches (of equal length) [works with listed data?]
+        windowsizes: a list with the windowsizes needed corresponding to the list of unrolled networks to be trained
+        batchsizes: a list of batchsizes for each window set according to the scale factor depending on the size of your RAM and GPU mem
+    Return:
+        indices: a nested list of lists of tuples with each tuple the according indices for chosen group, chosen batch, chosen timestep. 
+        		The outer list corresponds to the number of windowsizes/models. The innerlist is the index of the next step of the sliding window of that batch.
+        		Each element in the list is a array with sets of movie-indices. Every set of movie indices is an array of 3 numbers:
+        		[tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
+        
+    '''
+    feature_size = data_list[0][0].shape[2]
+    output_size = data_list[0][1].shape[2]
+    if len(window_sizes) != len(batch_sizes):
+    	raise SyntaxError('Number of windowsizes is not equal to number of batchsizes.')
+    	
+    total_indices = [] #to be returned in the end
+    for wi in range(len(window_sizes)):#outer list over models
+    	#create list of tuples of movie and batch indices with movies longer than the required size
+    	possible_movies=[ (ti, bi) for ti in range(len(data_list)) for bi in range(data_list[ti][0].shape[0]) if data_list[ti][0].shape[1] > (2*window_sizes[wi])]
+    	#print possible_movies
+    	if len(possible_movies) == 0:
+    		raise SyntaxError('Windowsize '+str(window_sizes[wi])+' is too big for this set of data ['+str(max([data_list[i][0].shape[1] for i in range(len(data_list))]))+' max]. Consider using fully unrolled option with --batchwise_learning True.')
+    	
+    	#choose the tuples from which the window is picked
+    	b_indices = [] #an array of indices for 1 batch for this window size
+    	for bi in range(batch_sizes[wi]):
+    		tup_ind, mov_ind = random.choice(possible_movies)
+    		start_ind = random.choice(range( data_list[tup_ind][0].shape[1]-2*window_sizes[wi]))
+    		b_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
+    	b_indices = np.concatenate(b_indices)
+    	#if start_ind
+    	#fill in the local indices while incrementing the start index
+    	local_indices = [] #list of length of the window with tuples corresponding to this window. The start index is shifted each time.
+    	#import pdb; pdb.set_trace()
+    	for li in range(window_sizes[wi]):
+    		b_indices_shifted = np.array(b_indices)
+    		b_indices_shifted[:,2]+=li
+    		local_indices.append(b_indices_shifted)
+    		#import pdb; pdb.set_trace()
+    	if len(local_indices) != window_sizes[wi]: raise ValueError('Failed to append full sliding window to local_indices.')
+    	total_indices.append(local_indices)
+    return total_indices
+
 def copy_windows_from_data(data_list, window_size, indices):
     ''' create batch of window_size length
     Args:
@@ -500,9 +554,14 @@ def copy_windows_from_data(data_list, window_size, indices):
     data = np.zeros((batch_size, window_size, data_list[0][0].shape[2]))
     labels = np.zeros((batch_size, window_size, data_list[0][1].shape[2]))
     for i in range(batch_size):
-        tup_ind, mov_ind, start_ind = indices[i]
-        data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
-        labels[i] = data_list[tup_ind][1][mov_ind][start_ind:start_ind+window_size][:]
+        try:
+            tup_ind, mov_ind, start_ind = indices[i]
+            data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
+            labels[i] = data_list[tup_ind][1][mov_ind][start_ind:start_ind+window_size][:]
+        except ValueError:
+            print 'data: ', str(data[i].shape) ,' doesnt fit with original data: ', str(data_list[0][0][mov_ind][start_ind:start_ind+window_size][:].shape)
+            print 'tup ', tup_ind,' mov ',mov_ind,' start ',start_ind,' windowsize: ',window_size,' data length ', str(data_list[0][0][mov_ind].shape)
+            return None, None
     return data, labels
 #####################################################################
 
@@ -533,13 +592,13 @@ if __name__ == '__main__':
     #testset = prepare_data_list(test_objects)
     #validationset = prepare_data_list(validate_objects)
     #trainingset = prepare_data_grouped(training_objects)
-    trainingset = prepare_data_list(['0000'])
+    trainingset = prepare_data_list(['0000', '0010'])
     
-    window_sizes=[1]
-    batch_sizes=[10]
+    window_sizes=[4]
+    batch_sizes=[6]
     
-    indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
-    import pdb; pdb.set_trace()
+    indices = pick_sliding_windows(trainingset, window_sizes, batch_sizes)
+    #import pdb; pdb.set_trace()
     #print type(trainingset)
     
     #training_data, training_labels = prepare_data(training_objects, sample_step=100, feature_type='both')

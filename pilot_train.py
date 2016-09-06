@@ -213,27 +213,41 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
         # the inner nested list corresponds to different tuples for that model according to the size of the data
         # the more the data ==> the more index tuples in the inner list
         # the bigger the gpu ==> the more models ==> the larger the outer list
-        window_indices = pilot_data.pick_random_windows(data_list, window_sizes, batch_sizes)
-        # import pdb; pdb.set_trace()
+        if FLAGS.sliding_window: #Still broken because steps only over the window length instead of the full sequence
+            window_indices = pilot_data.pick_sliding_windows(data_list, window_sizes, batch_sizes)
+        else:
+            window_indices = pilot_data.pick_random_windows(data_list, window_sizes, batch_sizes)
+        print 'finished picking window indices'
+        #import pdb; pdb.set_trace()
         # get the initial innerstate of the models according to the windows
-        if not FLAGS.fc_only: all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
+        if not FLAGS.fc_only: 
+            before_time = time.time()
+            all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
+            #print 'new duration', print_time(before_time)
+            #after_time = time.time()
+            #all_initial_states_old = pilot_eval.get_initial_states_old(models, window_indices, mvalid, data_list, session)
+            #print 'old duration', print_time(after_time), ' from ',print_time(before_time)
+            #import pdb; pdb.set_trace()
+            #if np.amax(all_initial_states[0][0]-all_initial_states_old[0][0]) != 0:
+            #    raise IndexError('multithreaded innerstate calculations failed')
+            print 'finished getting initial states: ', print_time(before_time)
         #res_state = session.run(trainingmodels[0].initial_state)
         
     #choose 1 model/batch from which the first movie is recorded
     #in case of validation each batch contains only 1 movie
-    if FLAGS.fc_only:
-        chosen_batch = 0
-        model_indices = [0]
-    elif window_indices:
+    if window_indices:
         chosen_batch = int(random.uniform(0,len(models))) 
         model_indices = range(len(models))
     else:
-        chosen_batch = int(random.uniform(0,len(data_list))) 
-        model_indices = range(len(data_list))
+        chosen_batch = 0
+        model_indices = [0]
+    #    chosen_batch = int(random.uniform(0,len(data_list))) 
+    #    model_indices = range(len(data_list))
     #pick the models to train first from randomly
     if is_training and FLAGS.random_order: random.shuffle(model_indices)
     #import pdb; pdb.set_trace()
     model_results = []
+    result_list=[]
     for model_index in model_indices:
         if model_index == chosen_batch : writer = frame_writer
         else : writer = None
@@ -244,40 +258,12 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
             # learning rate goes down during learning
             lr_decay = FLAGS.lr_decay ** max(epoch_index - FLAGS.max_epoch, 0.0)
             mtrain.assign_lr(session, FLAGS.learning_rate * lr_decay)
-            print("Epoch: %d Learning rate: %.3f" % (epoch_index + 1, session.run(mtrain.lr)))
-            #The next batch is copied into RAM
-            # if FLAGS.fc_only:
-#                 #Prepare data by picking random samples 
-#                 b_size = FLAGS.batch_size_fnn
-#                 b_lengths = [data_list[k][0].shape[0]*data_list[k][0].shape[1] for k in range(len(data_list))]
-#                 results = []
-#                 # run several times over different minibatches
-#                 for e in range(int(sum(b_lengths)/b_size)):
-#                     data = np.zeros((b_size, 1, data_list[0][0].shape[2]*FLAGS.step_size_fnn))
-#                     targets = np.zeros((b_size, 1, data_list[0][1].shape[2]))
-#                     for k in range(len(data_list)): #loop over different groups
-#                         num = int(b_size*b_lengths[k]/sum(b_lengths)) #number of elements from this group
-#                         #print 'list: ',k,'. Num: ', num
-#                         for model_index in range(num):
-#                             b_index=int(random.uniform(0,data_list[k][0].shape[0]))#batch index
-#                             t_index=int(random.uniform(0,data_list[k][0].shape[1]-FLAGS.step_size_fnn))#time index
-#                             data[k+model_index,0,:]=np.concatenate(data_list[k][0][b_index, t_index:t_index+FLAGS.step_size_fnn, :])
-#                             targets[k+model_index,0,:]=data_list[k][1][b_index, t_index+FLAGS.step_size_fnn-1, :]
-#                             #import pdb;pdb.set_trace()
-#                             #print 'at ',model_index,' of ',num,' chosen batch: ',b_index,' chosen time step: ',t_index
-#                     res=run_batch_fc(session, mtrain, data, targets, mtrain.train_op, writer=writer)
-#                     try:
-#                         results = [results[k]+res[k] for k in range(len(res))]
-#                     except IndexError : 
-#                         results = [res[k] for k in range(len(res))]
-#                         pass
-#                 results = [results[k]/int(sum(b_lengths)/b_size) for k in range(len(results))]
-                #import pdb; pdb.set_trace()     
-            #else: #windowwise learning aka truncated BPTT 
+            print("Epoch: %d Learning rate: %.5f" % (epoch_index + 1, session.run(mtrain.lr)))
+            #The next batch is copied into RAM   
+            #windowwise learning aka truncated BPTT 
             if not FLAGS.batchwise_learning and window_indices and window_sizes:
                 #import pdb; pdb.set_trace()
                 #loop over the index-tuples that relate to the model_index-th model
-                result_list=[]
                 for inner_list_index in range(len(window_indices[model_index])):
                     data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[model_index], window_indices[model_index][inner_list_index])
                     if FLAGS.fc_only: #in case of fully connected only
@@ -324,7 +310,10 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
                                                        verbose = False) #matfile=location+"/valstates_"+str(epoch_index)+".mat")
             
         model_results.append(results)
-    return model_results
+    if len(model_results) == 1 and result_list:
+        return result_list
+    else:
+        return model_results
     
 def define_batch_sizes_for_stepwise_unrolling(data_list):
     '''creates a list of sizes starting from size 1 
@@ -412,186 +401,211 @@ def main(_):
     # Tell TensorFlow that the model will be built into the default Graph.
     #with tf.Graph().as_default(), tf.Session() as session:
     #with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(log_device_placement=True, log_device_placement=True)) as session, tf.device('/cpu:0'):
-    with tf.Graph().as_default():
+    start_time = time.time()
         
-        # Define initializer
-        initializer = tf.random_uniform_initializer(-FLAGS.init_scale, FLAGS.init_scale)
-        #initializer = tf.constant_initializer(1.0)
+    # Define the batchsizes and window_sizes (numsteps) for the different models during training
+    if FLAGS.batchwise_learning:
+        batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
+        window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
+    else: # in case of windowwise learning
+        window_sizes = [50, 100, 500] 
+        batch_sizes = [30, 15, 3] #12G
+        
+        #window_sizes = [1, 10, 100]
+        #batch_sizes = [200, 20, 2] 
+        
+        #window_sizes = [300, 100, 30]
+        #batch_sizes = [2, 5, 15] 
+        
+        #window_sizes = [1, 5, 10, 50, 100, 500]
+        #batch_sizes = [100, 50, 20, 8, 4, 1] #4G 
+        #batch_sizes = [200, 50, 20, 8, 4, 1] #4G 
+        #batch_sizes = [600, 150, 60, 24, 12, 3] #12G
+        
+        if FLAGS.window_size != 0:
+            window_sizes = [FLAGS.window_size]
+            batch_sizes = [FLAGS.batch_size_fnn]
+        if FLAGS.model == "small":
+            window_sizes = [5,10] 
+            batch_sizes = [10, 5] 
+        if FLAGS.fc_only: #in case of training FNN no timesteps are needed
+            window_sizes = [1]
+            batch_sizes = [FLAGS.batch_size_fnn]
+    print 'batch_sizes ',batch_sizes
+    print 'window_sizes ',window_sizes
+    
+    #Train LSTM starting on a each windowsize max_max amount of epochs [could be looped later: ]
+    for windex in range(len(window_sizes)):
+        window_start_time = time.time()
+        print "started window number ",windex," with wsize: ",window_sizes[windex]," and batchsize: ",batch_sizes[windex]
+        
+        g = tf.Graph()
+        with g.as_default():
             
-        start_time = time.time()
-        
-        # Define the batchsizes and window_sizes (numsteps) for the different models during training
-        if FLAGS.batchwise_learning:
-            batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
-            window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
-        else: # in case of windowwise learning
-            #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
-            #window_sizes = sorted([b*10**e for b in [1,2,5] for e in range(10) if b*10**e >=5 and b*10**e < training_data_list[-1][0].shape[1]])
-            #window_sizes = [10, 50, 100]#,500]
-            window_sizes = [100, 200]#,500]
+            # Define initializer
+            initializer = tf.random_uniform_initializer(-FLAGS.init_scale, FLAGS.init_scale)
+            #initializer = tf.constant_initializer(1.0)
             
-            #window_sizes = [5, 10]
-            #it would be good if batch_sizes were adaptive to trainingdata... 
-            #if there are only x movies of largest length
-            #batchsize shouldnt be bigger than x and other batches could be bigger.
-            #batch_sizes = [int(b*FLAGS.scale) for b in batch_sizes]
-            #batch_sizes = [10, 5, 2]#, 1]
-            batch_sizes = [3, 1]#, 1]
-            if FLAGS.model == "small":
-                window_sizes = [5,10,20] 
-                batch_sizes = [1, 2, 3] 
-            if FLAGS.window_size != 0:
-                window_sizes = [FLAGS.window_size]
-                batch_sizes = [FLAGS.batch_size_fnn]
-            if FLAGS.fc_only: #in case of training FNN no timesteps are needed
-                window_sizes = [1]
-                batch_sizes = [FLAGS.batch_size_fnn]
-        print 'batch_sizes ',batch_sizes
-        print 'window_sizes ',window_sizes
-        #import pdb;pdb.set_trace()
-        
-        # Build the LSTM Graph with 1 model for training, validation
-        trainingmodels = []
-        with tf.variable_scope("model", reuse=False, initializer=initializer) as model_scope:
-            config.batch_size = batch_sizes[0]
-            config.num_steps = window_sizes[0]
-            mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
-                                           config.batch_size, config.num_steps, 'train')
-            trainingmodels.append(mtrain)
-        # Reuse the defined weights but initialize with random_uniform_initializer
-        with tf.variable_scope(model_scope, reuse=True, initializer=initializer): 
-            for i in range(1,len(batch_sizes)):
-                config.batch_size=batch_sizes[i]
-                config.num_steps=window_sizes[i]
+            # Build the LSTM Graph with 1 model for training, validation
+            trainingmodels = []
+            with tf.variable_scope("model", reuse=False, initializer=initializer) as model_scope:
+                config.batch_size = batch_sizes[windex]
+                config.num_steps = window_sizes[windex]
                 mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
-                                           config.batch_size, config.num_steps, 'train')
-                trainingmodels.append(mtrain)       
-            FLAGS.gpu = False
-            mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
-        
-        print "Loading models finished... ", print_time(start_time)
-        print "Number of models: ", len(trainingmodels)
-        # Add ops to save and restore all the variables.
-        saver = tf.train.Saver()
-        
-        
-        # Define session and initialize
-        session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-        #session = tf.Session(config=tf.ConfigProto(allow_soft_placement=False))
-        
-        # Initialize all variables (weights and biases)
-        if FLAGS.finetune:
-            print 'restoring session from folder: ', FLAGS.init_model_dir
-            saver.restore(session, FLAGS.init_model_dir+"/model.ckpt")
-            print "model restored: ",FLAGS.init_model_dir+"/model.ckpt"
-        else:
-            init = tf.initialize_all_variables()
-            session.run(init)
-        #import pdb; pdb.set_trace()
-        
-        # define overview_writer
-    	# create some tensor op for calculating and keeping the accuracy/loss over different epochs
-        writer_overview= tf.train.SummaryWriter(logfolder+'/overview', graph=session.graph) 
-    	if FLAGS.continuous:
-       		average_loss=tf.placeholder(tf.float32)
-       		max_loss=tf.placeholder(tf.float32)
-       		min_loss=tf.placeholder(tf.float32)
-       		al=tf.scalar_summary("average_loss",average_loss)
-       		mal=tf.scalar_summary("max_loss",max_loss)
-       		mil=tf.scalar_summary("min_loss",min_loss)
-       		merge = tf.merge_summary([al, mal, mil])
-    	else:
-    	   	accuracy_av = tf.placeholder(tf.float32)
-       		accuracy_max = tf.placeholder(tf.float32)
-       		accuracy_min = tf.placeholder(tf.float32)
-       		loss_av = tf.placeholder(tf.float32)
-       		acc_sum = tf.scalar_summary("accuracy_av", accuracy_av)
-       		acc_max_sum = tf.scalar_summary("accuracy_max", accuracy_max)
-       		acc_min_sum = tf.scalar_summary("accuracy_min", accuracy_min)
-       		l_sum = tf.scalar_summary("loss", loss_av)
-       		merge = tf.merge_summary([acc_sum, acc_max_sum,acc_min_sum, l_sum])
-        
-        current_epoch = 0
-        #Train while model gets better with upperbound max_max_epoch as number of runs
-        for i in range(FLAGS.max_max_epoch):
-            #every 1/5/10/50/100/500/1000 epochs it should write the current data away
-            writer = None
-            validate = False #only validate at some points during traing but not every epoch
-            # write different epochs away as different logs in a logarithmic range till max_max_epoch
-            if i in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,2,5]):
-                if i!= 1:
-                    #delete logdata of previous run except for the first run
+                                            config.batch_size, config.num_steps, 'train')
+                trainingmodels.append(mtrain)
+            # Reuse the defined weights but initialize with random_uniform_initializer
+            with tf.variable_scope(model_scope, reuse=True, initializer=initializer): 
+                #if FLAGS.batchwise_learning:
+                    #for i in range(1,len(batch_sizes)):
+                        #config.batch_size=batch_sizes[i]
+                        #config.num_steps=window_sizes[i]
+                        #mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
+                                                #config.batch_size, config.num_steps, 'train')
+                        #trainingmodels.append(mtrain)       
+                #FLAGS.gpu = False
+                mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+            
+            print "Loading models finished... ", print_time(start_time)
+            print "Number of models: ", len(trainingmodels)
+            # Add ops to save and restore all the variables.
+            saver = tf.train.Saver()
+                        
+            # Define session and initialize
+            session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+            #session = tf.Session(config=tf.ConfigProto(allow_soft_placement=False))
+            
+            # Initialize all variables (weights and biases)
+            if FLAGS.finetune:
+                print 'restoring session from folder: ', FLAGS.init_model_dir
+                saver.restore(session, '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.init_model_dir+"/model.ckpt")
+                print "model restored: ",FLAGS.init_model_dir+"/model.ckpt"
+            else:
+                init = tf.initialize_all_variables()
+                session.run(init)
+            #import pdb; pdb.set_trace()
+            
+            # define overview_writer
+            # create some tensor op for calculating and keeping the accuracy/loss over different epochs
+            writer_overview= tf.train.SummaryWriter(logfolder+'/overview'+str(windex), graph=session.graph) 
+            #if FLAGS.continuous:
+            average_loss=tf.placeholder(tf.float32)
+            max_loss=tf.placeholder(tf.float32)
+            min_loss=tf.placeholder(tf.float32)
+            al=tf.scalar_summary("average_loss",average_loss)
+            mal=tf.scalar_summary("max_loss",max_loss)
+            mil=tf.scalar_summary("min_loss",min_loss)
+            average_score=tf.placeholder(tf.float32)
+            max_score=tf.placeholder(tf.float32)
+            min_score=tf.placeholder(tf.float32)
+            a_s=tf.scalar_summary("average_score",average_score)
+            ma_s=tf.scalar_summary("max_score",max_score)
+            mi_s=tf.scalar_summary("min_score",min_score)
+            merge = tf.merge_summary([al, mal, mil, a_s, ma_s, mi_s])
+            #else:
+                    #accuracy_av = tf.placeholder(tf.float32)
+                    #accuracy_max = tf.placeholder(tf.float32)
+                    #accuracy_min = tf.placeholder(tf.float32)
+                    #loss_av = tf.placeholder(tf.float32)
+                    #acc_sum = tf.scalar_summary("accuracy_av", accuracy_av)
+                    #acc_max_sum = tf.scalar_summary("accuracy_max", accuracy_max)
+                    #acc_min_sum = tf.scalar_summary("accuracy_min", accuracy_min)
+                    #l_sum = tf.scalar_summary("loss", loss_av)
+                    #merge = tf.merge_summary([acc_sum, acc_max_sum,acc_min_sum, l_sum])
+            
+            #Train while model gets better with upperbound max_max_epoch as number of runs
+            for current_epoch in range(FLAGS.max_max_epoch):
+                #every 1/5/10/50/100/500/1000 epochs it should write the current data away
+                writer = None
+                validate = False #only validate at some points during traing but not every epoch
+                # write different epochs away as different logs in a logarithmic range till max_max_epoch
+                if current_epoch in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,2,5]):
+                    if current_epoch!= 1:
+                        #delete logdata of previous run except for the first run
+                        location = logfolder+"/e"+str(current_epoch)
+                        shutil.rmtree(location,ignore_errors=True) #it might delete the wrong folder...		
+                    current_epoch = current_epoch
+                    #Dont validate, in an obstacle world that doesn't make sense
+                    validate=True
+                    #print "save epoch: ", current_epoch+1
                     location = logfolder+"/e"+str(current_epoch)
-                    shutil.rmtree(location,ignore_errors=True) #it might delete the wrong folder...		
-                current_epoch = i
-                #Dont validate, in an obstacle world that doesn't make sense
-                validate=True
-                #print "save epoch: ", i+1
-                location = logfolder+"/e"+str(i)
-                #Write never away ==> check if this solves the multiple events for one run...
-                #writer = tf.train.SummaryWriter(location, graph=session.graph)
-            
-            #Train
-            train_results = []
-            epoch_time=time.time()
-            train_results = run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, i, writer, window_sizes, batch_sizes, mvalid)
-            print "Training finished... ", print_time(epoch_time), ". Results: ", train_results
-            
-            #only validate in few cases as it takes a lot of time setting the network on the GPU and evaluating all the movies
-            if validate or FLAGS.validate_always:
-                val_results = []
-                #Validate
+                    writer = tf.train.SummaryWriter(location, graph=session.graph)
+                #Always validate the last run
+                if current_epoch == (FLAGS.max_max_epoch-1):
+                    validate=True
+                    
+                #Train
+                train_results = []
                 epoch_time=time.time()
-                val_results = run_epoch(False, session, [mvalid], validate_data_list, config, logfolder, i, writer)
-                print "Validation finished... ",print_time(epoch_time)
-            
-            # write away results of this epoch
-            if writer_overview: 
-                if FLAGS.continuous:
-                    losses = [mres[1] for mres in train_results]
-                    feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
-                    print("Epoch: %d Average loss over different unrolled models: %f, Max: %f, Min: %f." % (i + 1,sum(losses)/len(losses),max(losses),min(losses)))
-                else:#continuous case
-                    accuracies = [mres[0] for mres in train_results]
-                    losses = [mres[1] for mres in train_results]
-                    feed_dict = {accuracy_av : sum(accuracies)/len(accuracies), accuracy_max: max(accuracies), accuracy_min: min(accuracies), loss_av: sum(losses)/len(losses)}
-                    print("Epoch: %d Average Accuracy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (i + 1, sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
-                summary_str = session.run(merge, feed_dict)
-                writer_overview.add_summary(summary_str, i)
+                train_results = run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, current_epoch, writer, [window_sizes[windex]], [batch_sizes[windex]], mvalid)
+                print "Training finished... ", print_time(epoch_time), "."
                 
-        		
-        	#get max loss, min loss and average loss from model results
-        	#av_loss = sum(losses)/len(losses)
-    		#max_loss = max(losses)
-    		#feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
-            	#print 'add epoch summary: ', epoch_index        		
-                #writer_overview.add_summary(summary_str, epoch_index)
-    		#summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
-    		#
-        	#print("Epoch: %d Final Score: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (epoch_index + 1, acc , acc_max, winner_index, acc_min, lozer_index))
-        	#print("Epoch: %d Average Loss over different unrolled models: %f, Max: %f, Min: %f." % (epoch_index + 1, sum(losses)/len(losses), max(losses), min(losses)))
-            sys.stdout.flush()
-            #save session every 100Es 
-            #if (i%50) == 0:
-            if os.path.isfile(logfolder+"/model.ckpt"):
-                os.remove(logfolder+"/model.ckpt")
-            # Save the variables to disk.
-            save_path = saver.save(session, logfolder+"/model.ckpt")
-            print("Model %d saved in file: %s" %( i, save_path ))
-                   
-            
-        # Free some memory
-        training_data_list = None
-        validate_data_list = None
-        if os.path.isfile(logfolder+"/model.ckpt"):
-            os.remove(logfolder+"/model.ckpt")
-        # Save the variables to disk.
-        save_path = saver.save(session, logfolder+"/model.ckpt")
-        print("Final model saved in file: %s" % save_path)
+                #only validate in few cases as it takes a lot of time setting the network on the GPU and evaluating all the movies
+                if validate or FLAGS.validate_always:
+                    val_results = []
+                    #Validate
+                    epoch_time=time.time()
+                    val_results = run_epoch(False, session, [mvalid], validate_data_list, config, logfolder, current_epoch, writer)
+                    print "Validation finished... ",print_time(epoch_time)
+                
+                # write away results of this epoch
+                if writer_overview: 
+                    scores = [mres[0] for mres in train_results]
+                    losses = [mres[1] for mres in train_results]
+                    feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses), average_score: sum(scores)/len(scores), max_score: max(scores), min_score: min(scores)}
+                    print("Epoch: %d Average score over different unrolled models: %f, Max: %f, Min: %f. Average Loss: %f, Max: %f, Min: %f" % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses),sum(scores)/len(scores),max(scores),min(scores)))
+                    #if FLAGS.continuous:
+                        #scores = [mres[0] for mres in train_results]
+                        #losses = [mres[1] for mres in train_results]
+                        #feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
+                        #print("Epoch: %d Average loss over different unrolled models: %f, Max: %f, Min: %f." % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses)))
+                    #else:#continuous case
+                        #accuracies = [mres[0]/mres[2] for mres in train_results]
+                        #losses = [mres[1] for mres in train_results]
+                        #feed_dict = {accuracy_av : sum(accuracies)/len(accuracies), accuracy_max: max(accuracies), accuracy_min: min(accuracies), loss_av: sum(losses)/len(losses)}
+                        #print("Epoch: %d Average Accuracy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (current_epoch + 1, sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
+                    summary_str = session.run(merge, feed_dict)
+                    writer_overview.add_summary(summary_str, current_epoch*(1+windex)+windex*FLAGS.max_max_epoch)
+                    
+                    #get max loss, min loss and average loss from model results
+                    #av_loss = sum(losses)/len(losses)
+                    #max_loss = max(losses)
+                    #feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
+                    #print 'add epoch summary: ', epoch_index        		
+                    #writer_overview.add_summary(summary_str, epoch_index)
+                    #summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
+                    #
+                    #print("Epoch: %d Final Score: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (epoch_index + 1, acc , acc_max, winner_index, acc_min, lozer_index))
+                    #print("Epoch: %d Average Loss over different unrolled models: %f, Max: %f, Min: %f." % (epoch_index + 1, sum(losses)/len(losses), max(losses), min(losses)))
+                    
+                sys.stdout.flush()
+                #save session every 100Es 
+                #if (current_epoch%50) == 0:
+                if os.path.isfile(logfolder+"/model.ckpt"):
+                    os.remove(logfolder+"/model.ckpt")
+                # Save the variables to disk.
+                save_path = saver.save(session, logfolder+"/model.ckpt")
+                print("Model %d saved in file: %s" %( current_epoch*(1+windex), save_path ))
+                # Use this model for finetuning in case of several windowsizes:
+                head, FLAGS.init_model_dir = os.path.split(logfolder)
+                FLAGS.finetune = True
+            # Free all memory after training
+            session.close()
+            saver = None
+            writer_overview = None
+            merge = None
+            if not FLAGS.batchwise_learning:
+                print 'windowsize: ', window_sizes[windex],' is finished after: ',print_time(window_start_time),'.'
+        g = None
+    # Free some memory
+    training_data_list = None
+    validate_data_list = None
+    #if os.path.isfile(logfolder+"/model.ckpt"):
+        #os.remove(logfolder+"/model.ckpt")
+    ## Save the variables to disk.
+    #save_path = saver.save(session, logfolder+"/model.ckpt")
+    #print("Final model saved in file: %s" % save_path)
         
-        # Free all memory after training
-        session.close()
-        #tf.reset_default_graph()
     # Evaluate the model
     FLAGS.model_dir = logfolder
     pilot_eval.evaluate(logfolder=logfolder, config=config, scope="model")

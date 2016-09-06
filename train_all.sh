@@ -3,6 +3,11 @@
 #See if it is ok to delete the .tmp folder...
 #rm -rf .tmp
 
+###Loop over different windowsizes for wall challenge
+for i in $(seq 20 20 200);
+do
+    ./condor_task.sh $i $((500/$i)) r2 #with 500 the max size of the model (ws*bs)
+done
 
 ##STEP 1: pick CNN feats inception/pcnn app/flow/both
 #                model bwise fc step_size_fnn ftype network wsize bsize sample log_tag
@@ -53,11 +58,11 @@
 #./condor_task.sh cont 1
 
 ##STEP 2: choose hidden size
-##              model hidden window batch
-./condor_task.sh cont 20 100 1
-./condor_task.sh cont 50 100 1
-./condor_task.sh cont 100 100 1
-./condor_task.sh cont 200 100 1
+# ##              model hidden window batch
+# ./condor_task.sh cont 20 100 1
+# ./condor_task.sh cont 50 100 1
+# ./condor_task.sh cont 100 100 1
+# ./condor_task.sh cont 200 100 1
 
 
 ## adapt size in default values of pilot code

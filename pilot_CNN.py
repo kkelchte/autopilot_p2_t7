@@ -71,6 +71,21 @@ last_image="" #last image that was processed
 feature_tensor=None #the tensor that should be invoked to obtain the feature
 delay=0
 
+def print_time(start_time):
+    '''Print the time passed after the start_time defined in hours, minutes and seconds
+    Arg:
+        start_time: the moment from which you started counting the time.
+    Returns:
+        string with time message.
+    '''
+    duration = (time.time()-start_time)
+    return print_duration(duration)
+    
+def print_duration(duration):
+    m, s = divmod(duration, 60)
+    h, m = divmod(m, 60)
+    return "time: %d:%02d:%02d" % (h, m, s)
+    
 def create_graph():
     """Creates a graph from saved GraphDef file and returns a saver."""
     # Creates graph from saved graph_def.pb.
@@ -94,8 +109,7 @@ def extract_offline():
     
     movies_dir=FLAGS.data_dir_offline+chosen_set
     
-    movies=['0079','0080','0081','0082','0083','0084','0085','0086','0087','0088','0089','0090','0091','0092','0093','0094','0095']
-    #movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
+    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
     #if len(FLAGS.movie) != 0:
         #movies = [FLAGS.movie]
     #else:
@@ -158,7 +172,7 @@ def extract_offline():
             #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             
-            print 'duration: ', int(time.time()-starttime), '. Estimated time: ', int((time.time()-starttime)*(len(movies)-i))
+            print 'Duration of last movie: ', print_time(starttime), '. Estimated time: ', print_duration(int((time.time()-starttime)*(len(movies)-i)))
         
 
 def extract_online():

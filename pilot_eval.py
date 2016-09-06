@@ -15,9 +15,10 @@ import sys
 import pyinotify
 
 import os, shutil
+import re
  
 import matplotlib.pyplot as plt
-
+import copy
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -39,6 +40,9 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_string(
     "model_name", "remote_set7d3_sz_100_net_inception",
     "pick which control model is used for steering the online control.")
+tf.app.flags.DEFINE_boolean(
+    "skip_initial_state", False,
+    "In case the model is trained on time-window-batches from zero initial state.")
 
 
 #global variable feature bucket is a buffer used by the eventhandler to collect new arrived features as a list of paths
@@ -145,26 +149,97 @@ def get_initial_states(models, indices, meval, data_list, sess):
         resulting states listed up in nested lists: the outer list corresponding to the number of models
         the inner list corresponding to the number of times a window batch is applied in one epoch.
     '''
+    #### new implementation
+    #create pop up list with all index_tuples of indices from which an initial states needs to be found
+    all_movies=[ (oi, ii) for oi in range(len(indices)) for ii in range(len(indices[oi]))]
+    total_indices = copy.deepcopy(indices)
+    
+    #start some threads and a coordinator
+    #each thread should do:
+    #   pop index
+    #   extract initial state by looping over frames
+    #   save initial states in initial_states_all
+    #--> should be a 3D array instead of 2 nested lists of 1d states
+    
+    # Thread body: loop until the coordinator indicates a stop was requested.
+    # If some condition becomes true, ask the coordinator to stop.
+    def MyLoop(coord,all_movies):#meval, data_list
+        while not coord.should_stop():
+            try:
+                oi, ii = all_movies.pop()
+                print 'im evaluating: outer index ', oi,' inner index ',ii
+                # Get initial state
+                model = models[oi]
+                zerostate = sess.run(model.initial_state)
+                initial_states = np.zeros(zerostate.shape)
+                #print 'initial_states: ',initial_states
+                for ib in range(indices[oi][ii].shape[0]):#index of movie in batch
+                    #import pdb; pdb.set_trace()
+                    [tup_ind, mov_ind, start_ind] = indices[oi][ii][ib] #get indices needed for finding data
+                    state = sess.run(meval.initial_state) #initialize eval network with zero state
+                    #import pdb; pdb.set_trace()
+                    for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
+                        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]), meval.initial_state: state}
+                        outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+                        #state = sess.run([meval.state], feed_dict)
+                    #import pdb; pdb.set_trace()
+                    initial_states[ib]=state
+                total_indices[oi][ii]=initial_states
+            except IndexError:
+                print 'Innerstate evaluation finished. Wait for threads to stop.'
+                coord.request_stop()
+        if len(all_movies)==0 :
+            coord.request_stop()
+
+    # Main code: create a coordinator.
+    coord = tf.train.Coordinator()
+
+    # Create 10 threads that run 'MyLoop()'
+    #num_threads=min(10,len(all_movies)/2)
+    # each batch for a certain model can be prepared with another thread
+    num_threads=min([len(i) for i in indices])
+    num_threads=min(50, num_threads) #avoid having way too many threads
+    threads = [tf.train.threading.Thread(target=MyLoop, args=(coord,all_movies)) for i in xrange(num_threads)]
+    
+    # Start the threads and wait for all of them to stop.
+    for t in threads: t.start()
+    coord.join(threads)
+    time.sleep(30)
+    #print total_indices[0][0]
+    #import pdb; pdb.set_trace()
+    return total_indices
+    
+def get_initial_states_old(models, indices, meval, data_list, sess):
+
+    #### old implementation ###
     initial_states_all = []
+    total_num_of_states = len(models)*len(indices[0])*indices[0][0].shape[0]
+    count = 0
     for im in range(len(models)):#index for model
         model = models[im]
         zerostate = sess.run(model.initial_state)
         #print 'zerostate: ',zerostate
         initial_states_local = [] #list for each time a batch-window is applied in one epoch
         for il in range(len(indices[im])):
-        	initial_states = np.zeros(zerostate.shape)
-        	#print 'initial_states: ',initial_states
-        	for ib in range(indices[im][il].shape[0]):#index of movie in batch
-        		#import pdb; pdb.set_trace()
-        	    [tup_ind, mov_ind, start_ind] = indices[im][il][ib] #get indices needed for finding data
-        	    state = sess.run(meval.initial_state) #initialize eval network with zero state
-        	    for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
-        	        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
-        	                    meval.initial_state: state}
-        	        outputs, state = sess.run([meval.logits, meval.state], feed_dict)
-        	        #state = sess.run([meval.state], feed_dict)
-        	    initial_states[ib]=state
-        	initial_states_local.append(initial_states)
+            if FLAGS.skip_initial_state:
+                initial_states_local.append(zerostate)
+            else:
+                initial_states = np.zeros(zerostate.shape)
+                #print 'initial_states: ',initial_states
+                for ib in range(indices[im][il].shape[0]):#index of movie in batch
+                    print 'init_state: ', count, ' of ', total_num_of_states
+                    count+=1
+                    #import pdb; pdb.set_trace()
+                    [tup_ind, mov_ind, start_ind] = indices[im][il][ib] #get indices needed for finding data
+                    #state = get_state(meval, start_ind, tup_ind, mov_ind, data_list)
+                    state = sess.run(meval.initial_state) #initialize eval network with zero state
+                    for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
+                        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
+                            meval.initial_state: state}
+                        outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+                    #state = sess.run([meval.state], feed_dict)
+                    initial_states[ib]=state
+                initial_states_local.append(initial_states)
         initial_states_all.append(initial_states_local)
     return initial_states_all
     
@@ -181,7 +256,7 @@ def evaluate(logfolder, config, scope="model"):
             mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
-        with tf.Session() as session:
+        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             saver.restore(session, FLAGS.model_dir+"/model.ckpt")
             print "model restored", FLAGS.model_dir+"/model.ckpt"
             location = logfolder+"/eval"
@@ -218,7 +293,7 @@ def evaluate(logfolder, config, scope="model"):
                 #per = per+perplexity/len(test_data_list)
                 #print("Test perplexity: %.3f" %perplexity)
             if not FLAGS.continuous:
-                accuracies = [mres[0] for mres in test_results]
+                accuracies = [mres[0]/mres[2] for mres in test_results]
                 losses = [mres[1] for mres in test_results]
                 print("Test: Average Accuarcy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
             else:#continuous case
@@ -238,6 +313,7 @@ def evaluate_online(logfolder, config, scope="model"):
     global local_state
     global mtest
     global delay
+    global session
     
     if FLAGS.ssh:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
@@ -252,9 +328,12 @@ def evaluate_online(logfolder, config, scope="model"):
         config: the configurations are grouped in a configuration object    
     """
     # Restore a saved model fitting this configuration < model_dir
-    with tf.Graph().as_default():
+    g = tf.Graph()
+    with g.as_default():
         if FLAGS.continuous:
             config.output = 6 #9 #4 ### TODO make this dynamic from model or input flags?
+        else: #continuous case
+            config.output = 41
         if FLAGS.network == 'stijn':
             config.feature_dimension = 4070 
         else:
@@ -265,91 +344,132 @@ def evaluate_online(logfolder, config, scope="model"):
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         # Start session
-        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session, tf.device(device_name):
-            saver.restore(session, FLAGS.model_dir+"/model.ckpt")
-            print "model restored", FLAGS.model_dir+"/model.ckpt"
-            #time.sleep(25)
-            location = logfolder+"/eval"
-            writer = tf.train.SummaryWriter(location, graph=session.graph)
-            #get the shape of the inner state of the model
-            if not FLAGS.fc_only:
-                local_state = session.run(mtest.initial_state)
-            #initial_state = np.zeros(prestate.shape)
-            #assign zeros to the initial state of the model
-            #session.run(tf.assign(mtest.initial_state, initial_state))
-            frame=0
-            ##initialize notifier
-            # watch manager
-            wm = pyinotify.WatchManager()
-            wm.add_watch(source_dir, pyinotify.IN_CREATE)
-            # event handler
-            eh = MyEventHandler()
-            # notifier working in the same thread
-            notifier = pyinotify.Notifier(wm, eh, timeout=10)
-            
-            def on_loop(notifier):
-                global current_feature
-                global last_feature
-                global frame
-                global local_state
-                global mtest
-                global delay
-                #import pdb; pdb.set_trace()
-                if current_feature == last_feature:
-                    print 'wait'
-                    #return
-                else:
-                    print 'run through new feature: ',frame
-                    try:
-                        # data needs to be np array [batchsize 1, num_steps 1, feature_dimension]
-                        if FLAGS.ssh: time.sleep(0.005) #wait till file is fully arrived on local harddrive when using ssh
-                        data=sio.loadmat(current_feature)
-                        if FLAGS.network == "inception":
-                            feature=data['features']
-                        elif FLAGS.network == "stijn":
-                            data=data['gazebo_sim_dataset']
-                            feature=data[0,0]['labels']
-                            feature = np.reshape(feature,(1,1,4070))
-                        #import pdb;pdb.set_trace()
-                        #plt.matshow(np.transpose(np.reshape(feature, (74,55))))
-                        #plt.show()
-                        # Define evaluate 1step unrolled
-                        if FLAGS.fc_only:
-                            feed_dict = {mtest.inputs: feature}
-                            outputs= session.run([mtest.logits],feed_dict)
-                        else:
-                            feed_dict = {mtest.inputs: feature, 
-                                mtest.initial_state: local_state}
-                            outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
-                        last_feature='%s' % current_feature # copy string object
-                        #writer.add_summary(summary_str, f)
+        session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+        saver.restore(session, FLAGS.model_dir+"/model.ckpt")
+        print "model restored", FLAGS.model_dir+"/model.ckpt"
+        #time.sleep(25)
+        location = logfolder+"/eval"
+        writer = tf.train.SummaryWriter(location, graph=session.graph)
+        #get the shape of the inner state of the model
+        if not FLAGS.fc_only:
+            local_state = session.run(mtest.initial_state)
+        #initial_state = np.zeros(prestate.shape)
+        #assign zeros to the initial state of the model
+        #session.run(tf.assign(mtest.initial_state, initial_state))
+        frame=0
+        ##initialize notifier
+        # watch manager
+        wm = pyinotify.WatchManager()
+        wm.add_watch(source_dir, pyinotify.IN_CREATE)
+        # event handler
+        eh = MyEventHandler()
+        # notifier working in the same thread
+        notifier = pyinotify.Notifier(wm, eh, timeout=10)
+        
+        def on_loop(notifier):
+            global current_feature
+            global last_feature
+            global frame
+            global local_state
+            global mtest
+            global delay
+            global session
+            global g
+            #import pdb; pdb.set_trace()
+            if current_feature == last_feature:
+                pass
+                #print 'wait'
+                #return
+            else:
+                print 'run through new feature: ',current_feature
+                try:
+                    # data needs to be np array [batchsize 1, num_steps 1, feature_dimension]
+                    if FLAGS.ssh: time.sleep(0.005) #wait till file is fully arrived on local harddrive when using ssh
+                    if current_feature == source_dir+'change_network':
+                        session.close()
+                        f = open(current_feature)
+                        FLAGS.model_name = f.read()[:-1]#skip the \n
+                        FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
+                        if FLAGS.model_name == 'dagger_big_net_stijn_depth' :
+                            FLAGS.network = 'stijn'
+                            config.feature_dimension = 4070
+                        else :
+                            config.feature_dimension = 2048
+                        if FLAGS.model_name == 'dagger_hsz_400_fc':
+                            FLAGS.fc_only = True
+                            FLAGS.hidden_size=400
+                        else :
+                            FLAGS.fc_only = False
+                            FLAGS.hidden_size=100
+                        g = None
+                        mtest = None
+                        g = tf.Graph()
+                        saver = None
+                        with g.as_default():
+                            with tf.variable_scope(scope), tf.device('/gpu:0'):
+                                mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+                            saver = tf.train.Saver()
+                            session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+                            saver.restore(session, FLAGS.model_dir+"/model.ckpt")
+                            last_feature='%s' % current_feature
+                            raise Exception('loaded new network: '+FLAGS.model_name)
+                            #import pdb; pdb.set_trace()
+                    # check if current features is a clear_memory message:
+                    if current_feature == source_dir+'clear_memory' and not FLAGS.fc_only:
+                        local_state = session.run(mtest.initial_state)
+                        last_feature='%s' % current_feature
+                        raise Exception('cleared inner state')
+                    if current_feature == source_dir+'clear_memory' and FLAGS.fc_only:
+                        last_feature='%s' % current_feature
+                        raise Exception('trajectory finished')
+                    data=sio.loadmat(current_feature)
+                    if FLAGS.network == "inception":
+                        feature=data['features']
+                    elif FLAGS.network == "stijn":
+                        data=data['gazebo_sim_dataset']
+                        feature=data[0,0]['labels']
+                        feature = np.reshape(feature,(1,1,4070))
+                    #import pdb;pdb.set_trace()
+                    #plt.matshow(np.transpose(np.reshape(feature, (74,55))))
+                    #plt.show()
+                    # Define evaluate 1step unrolled
+                    if FLAGS.fc_only:
+                        feed_dict = {mtest.inputs: feature}
+                        outputs= session.run([mtest.logits],feed_dict)
+                    else:
+                        feed_dict = {mtest.inputs: feature, 
+                            mtest.initial_state: local_state}
+                        outputs, local_state= session.run([mtest.logits, mtest.state],feed_dict)
+                    last_feature='%s' % current_feature # copy string object
+                    #writer.add_summary(summary_str, f)
+                    if FLAGS.continuous:
+                        output_str = str(outputs[0])[1:-1] #get the brackets off
+                        if FLAGS.fc_only:#Still needs to be tested!!
+                            output_str=re.sub('\n','',output_str)
+                            output_str=output_str[1:-1]
+                    else:
+                        #output_str = str(np.argmax(outputs))
+                        if outputs.shape[1]%2 == 0:
+                            raise SyntaxError('disc_factor is wrong: '+str((outputs.shape[1]+1)/2))
+                        disc_factor=int((outputs.shape[1]+1)/2)
+                        max_index = np.argmax(outputs)
+                        #print 'argmax output: ', max_index,' disc_factor: ',disc_factor
                         #import pdb; pdb.set_trace()
-                        if FLAGS.continuous:
-                            output_str = str(outputs[0])[1:-1] #get the brackets off
-                            if FLAGS.fc_only:#Still needs to be tested!!
-                                output_str=re.sub('\n','',output_str)
-                                output_str=output_str[1:-1]
-                        else:
-                            #output_str = str(np.argmax(outputs))
-                            if outputs.shape[0]%2 == 0:
-                                raise SyntaxError('disc_factor is wrong: '+str((outputs.shape[0]+1)/2))
-                            disc_factor=int((outputs.shape[0]+1)/2)
-                            max_index = np.argmax(outputs)
-                            output_str=convert_control_output.translate_index(max_index, disc_factor)
-                        print 'output: ', output_str
-                        #import pdb;pdb.set_trace()
-                        
-                        # Write output to control_output directory
-                        #fid = open('/esat/qayd/kkelchte/tensorflow/control_output/'+str(frame)+'.txt', 'w')
-                        fid = open(des_dir+str(frame)+'.txt', 'w')
-                        fid.write(output_str)
-                        fid.close()
-                        if FLAGS.ssh: time.sleep(0.002) # some time for saving the file
-                        frame=frame+1
-                        print "delay due to this feature: ", time.time()-delay
-                    except Exception as e:
-                        print "[eval] skip feature due to error: ",e
-            notifier.loop(callback=on_loop)
+                        output_str=convert_control_output.translate_index(max_index, disc_factor)
+                    print 'output: ', output_str
+                    #import pdb;pdb.set_trace()
+                    
+                    # Write output to control_output directory
+                    #fid = open('/esat/qayd/kkelchte/tensorflow/control_output/'+str(frame)+'.txt', 'w')
+                    fid = open(des_dir+str(frame)+'.txt', 'w')
+                    fid.write(output_str)
+                    fid.close()
+                    if FLAGS.ssh: time.sleep(0.002) # some time for saving the file
+                    frame=frame+1
+                    #print "delay due to this feature: ", time.time()-delay
+                except Exception as e:
+                    print "[eval] skip feature due to error: ",e
+        notifier.loop(callback=on_loop)
     
 
 class MyEventHandler(pyinotify.ProcessEvent):
@@ -364,7 +484,7 @@ class MyEventHandler(pyinotify.ProcessEvent):
         global delay
         current_feature = event.pathname
         print "received feature: ", current_feature
-        print "last feature: ", last_feature
+        #print "last feature: ", last_feature
         print "total delay from previous feature: ", time.time()-delay
         delay=time.time()    
         
@@ -380,6 +500,49 @@ def empty_folder(folder):
             
 #########################################
 def main(unused_argv=None):
+    #FLAGS.model = 'small'
+    #logfolder = pilot_settings.extract_logfolder()
+    #print 'logfolder',logfolder
+    #config = pilot_settings.get_config()
+    
+    #if FLAGS.model == "small":
+        #window_sizes = [5] 
+        #batch_sizes = [10]
+        
+    ##data_list
+    #training_data_list = pilot_data.prepare_data_general(config.training_objects)
+    
+    #config.output=training_data_list[0][1].shape[2]
+    #config.feature_dimension=training_data_list[0][0].shape[2]
+    
+    ##models
+    #initializer = tf.random_uniform_initializer(-0.01, 0.01)
+    #config.batch_size = batch_sizes[0]
+    #config.num_steps = window_sizes[0]
+    #trainingmodels = []
+    #with tf.variable_scope("model", reuse=False, initializer=initializer) as model_scope:
+        #mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
+                                #config.batch_size, config.num_steps, 'train')
+    #trainingmodels.append(mtrain)
+    
+    ##windowindices
+    #window_indices = pilot_data.pick_random_windows(training_data_list, window_sizes, batch_sizes)
+    
+    ##mvalid
+    #with tf.variable_scope(model_scope, reuse=True, initializer=initializer):
+        #mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+    
+    ##session
+    #session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+    #init = tf.initialize_all_variables()
+    #session.run(init)
+    #new_states = get_initial_states(trainingmodels, window_indices, mvalid, training_data_list, session)
+    #old_states = get_initial_states_old(trainingmodels, window_indices, mvalid, training_data_list, session)
+    #print str(old_states[0][0]-new_states[0][0])
+    #import pdb; pdb.set_trace()
+    #print 'finished!'
+    #return
+
     FLAGS.model = 'remote'
     logfolder = pilot_settings.extract_logfolder()
     print 'logfolder',logfolder
@@ -388,7 +551,6 @@ def main(unused_argv=None):
     if FLAGS.online:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
         empty_folder(source_dir)
-        FLAGS.continuous = True
         FLAGS.ssh = True
         #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set5_windowwise_sz_100_net_inception'
         #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception'

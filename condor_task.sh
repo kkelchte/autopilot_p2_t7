@@ -10,25 +10,44 @@ TASK='pilot_train.py' 	#name of task in matlab to run
 #model='cwall' #"$1"
 #log_tag="no_test" #tell python this is not a test so it is not including the testing tag
 
-#OA Inception
-#model='dagger' #'cwall' #"$1"
-#log_tag="4G" #"no_test" #tell python this is not a test so it is not including the testing tag
-#wsize='300' #'500' #"$3"
-#bsize='2' #"500" "$4"
+#Wall challenge for different windowsizes and according batchsizes
+model='winwall' #"$1"
+wsize="$1"
+bsize="$2"
+log_tag="$3" #tell python this is not a test so it is not including the testing tag
 
-#OA Stijns depth
-#model='dagger' #'cwall' #"$1"
-#log_tag="no_test" #tell python this is not a test so it is not including the testing tag
-#wsize='100' #'500' #"$3"
-#bsize='3' #"500" "$4"
+#Selection
+#model='seldat' #'cwall' #"$1"
+#log_tag="selected" #tell python this is not a test so it is not including the testing tag
 #feature_type='depth_estimate' #"$5"
 #network='stijn' #"$6"
 
+
+#OA Inception On All Daggersets
+#model='dagger' #'cwall' #"$1"
+#log_tag="big" #tell python this is not a test so it is not including the testing tag
+#fine='True'
+#mod_dir='dagger_4G_wsize_300'
+
+#OA Stijns depth
+#model='dagger' #'cwall' #"$1"
+#log_tag="big" #tell python this is not a test so it is not including the testing tag
+#feature_type='depth_estimate' #"$5"
+#network='stijn' #"$6"
+
+#OA FC
+#model='dagger'
+#log_tag='no_test'
+#fc='True'
+#bsize='500'
+#fine='True'
+#mod_dir='dagger_hsz_400_fc'
+
 #Discrete session
-model='dis'
-log_tag='no_test'
-wsize='300'
-bsize='1'
+#model='dis'
+#log_tag='fine'
+#wsize='300'
+#bsize='1'
 
 #hidden_size='400' #"$2"
 #batchwise="$2"
@@ -92,6 +111,10 @@ if [ ! -z $mod_dir ]; then
     TASK="$TASK --init_model_dir ${mod_dir}"
     #description="${description}_${log_tag}"
 fi
+if [ ! -z $fine ]; then
+    TASK="$TASK --finetune ${fine}"
+    description="${description}_fine"
+fi
 
 if [ ! -z $learning_rate ]; then 
 	TASK="$TASK --learning_rate ${learning_rate}"
@@ -136,17 +159,24 @@ echo "Universe         = vanilla" > $condor_file
 echo "">> $condor_file
 echo "RequestCpus      = 8" >> $condor_file
 echo "Request_GPUs = 1" >> $condor_file
-#echo "RequestMemory = 63G" >> $condor_file
-echo "RequestMemory = 16G" >> $condor_file
-#echo "RequestDisk      = 25G" >> $condor_file
+
+# ---4Gb option---
+echo "RequestMemory = 64427" >> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5) && (CUDADeviceName == \"GeForce GTX 960\" || CUDADeviceName == \"GeForce GTX 980\" )">> $condor_file
+echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 11000) && (CUDACapability >= 3.5)">> $condor_file
+
+# ---2Gb option---
+#echo "RequestMemory = 16G" >> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\") && (machine != \"amethyst.esat.kuleuven.be\" ) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' )" >> $condor_file
+
+echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,
 #if you want longer or shorter you can set the number of seconds. (max 1h ~ +3600s)
 #100 hours means 4 days 
 echo "+RequestWalltime = 360000" >> $condor_file 
 #echo "+RequestWalltime = 10800" >> $condor_file
 echo "">> $condor_file
-echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\")">> $condor_file
-#echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb > 1900) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' ) && (machineowner == Visics)" >> $condor_file
 #echo "Requirements = ((machine == "vega.esat.kuleuven.be") || (machine == "wasat.esat.kuleuven.be") || (machine == "yildun.esat.kuleuven.be"))" >> $condor_file
 
