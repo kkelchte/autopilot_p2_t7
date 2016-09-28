@@ -43,6 +43,12 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_boolean(
     "skip_initial_state", False,
     "In case the model is trained on time-window-batches from zero initial state.")
+tf.app.flags.DEFINE_boolean(
+    "fly_straight", False,
+    "Used for changing the control output to go straight.")
+tf.app.flags.DEFINE_integer(
+    "max_num_threads", 10,
+    "Set the maximum number of threads according to the size of the GPU. (20 is ok for 4G)")
 
 
 #global variable feature bucket is a buffer used by the eventhandler to collect new arrived features as a list of paths
@@ -131,8 +137,7 @@ def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, v
         sio.savemat(matfile,d, appendmat=True)
         
     if verbose:
-        if not FLAGS.continuous: print "Accuracy: ",(score/iters)
-        else: print "Average Loss: ",(costs/iters)   
+        print "Average loss: ",(costs/iters)," average score: ",(score/iters)
     ##Add call for tensor accuracy + write it away
     #loss is an average in case of numstep unrolled but not yet in case of one step unrolled.
     return score, (costs/iters), iters
@@ -154,6 +159,7 @@ def get_initial_states(models, indices, meval, data_list, sess):
     all_movies=[ (oi, ii) for oi in range(len(indices)) for ii in range(len(indices[oi]))]
     total_indices = copy.deepcopy(indices)
     
+        
     #start some threads and a coordinator
     #each thread should do:
     #   pop index
@@ -177,12 +183,12 @@ def get_initial_states(models, indices, meval, data_list, sess):
                     #import pdb; pdb.set_trace()
                     [tup_ind, mov_ind, start_ind] = indices[oi][ii][ib] #get indices needed for finding data
                     state = sess.run(meval.initial_state) #initialize eval network with zero state
-                    #import pdb; pdb.set_trace()
-                    for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
-                        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]), meval.initial_state: state}
-                        outputs, state = sess.run([meval.logits, meval.state], feed_dict)
-                        #state = sess.run([meval.state], feed_dict)
-                    #import pdb; pdb.set_trace()
+                    if not FLAGS.skip_initial_state:
+                        for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
+                            feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]), meval.initial_state: state}
+                            outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+                            #state = sess.run([meval.state], feed_dict)
+                        #import pdb; pdb.set_trace()
                     initial_states[ib]=state
                 total_indices[oi][ii]=initial_states
             except IndexError:
@@ -190,26 +196,29 @@ def get_initial_states(models, indices, meval, data_list, sess):
                 coord.request_stop()
         if len(all_movies)==0 :
             coord.request_stop()
-
-    # Main code: create a coordinator.
-    coord = tf.train.Coordinator()
-
-    # Create 10 threads that run 'MyLoop()'
-    #num_threads=min(10,len(all_movies)/2)
-    # each batch for a certain model can be prepared with another thread
-    num_threads=min([len(i) for i in indices])
-    num_threads=min(50, num_threads) #avoid having way too many threads
-    threads = [tf.train.threading.Thread(target=MyLoop, args=(coord,all_movies)) for i in xrange(num_threads)]
+    try:
+        # Main code: create a coordinator.
+        coord = tf.train.Coordinator()
+        # Create 10 threads that run 'MyLoop()'
+        #num_threads=min(10,len(all_movies)/2)
+        # each batch for a certain model can be prepared with another thread
+        num_threads=min([len(i) for i in indices])
+        num_threads=min(FLAGS.max_num_threads, num_threads) #avoid having way too many threads
     
-    # Start the threads and wait for all of them to stop.
-    for t in threads: t.start()
-    coord.join(threads)
-    time.sleep(30)
-    #print total_indices[0][0]
-    #import pdb; pdb.set_trace()
+        threads = [tf.train.threading.Thread(target=MyLoop, args=(coord,all_movies)) for i in xrange(num_threads)]
+        print 'number of threads: ',num_threads
+        # Start the threads and wait for all of them to stop.
+        for t in threads: t.start()
+        coord.join(threads, stop_grace_period_secs=240) #wait max 4minutes to stop threads before raising exception
+    except RuntimeError:
+        print "Thread took more than 4 minutes to sleep so we sleep for an extra 4 minutes..."
+        time.sleep(240)
+    except Exception as e:
+        print "Thread is still not ready so something is probably wrong? Or this is raised by another type of exception.", e.value
+        
     return total_indices
     
-def get_initial_states_old(models, indices, meval, data_list, sess):
+def get_initial_states_single(models, indices, meval, data_list, sess):
 
     #### old implementation ###
     initial_states_all = []
@@ -292,14 +301,15 @@ def evaluate(logfolder, config, scope="model"):
                 #acc = acc+accuracy/len(test_data_list)
                 #per = per+perplexity/len(test_data_list)
                 #print("Test perplexity: %.3f" %perplexity)
+            losses = [mres[1] for mres in test_results]
             if not FLAGS.continuous:
                 accuracies = [mres[0]/mres[2] for mres in test_results]
-                losses = [mres[1] for mres in test_results]
                 print("Test: Average Accuarcy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
             else:#continuous case
-                losses = [mres[1] for mres in test_results]
                 print("Test: Average loss over different unrolled models: %f, Max: %f, Min: %f." % (sum(losses)/len(losses),max(losses),min(losses)))
-                
+            f = open(logfolder+"/results.txt", 'a')
+            f.write('Test: Average loss: %f, Max: %f, Min: %f.\n' % (sum(losses)/len(losses),max(losses),min(losses)))
+            f.close()
             #print 'average accuracy: ',acc
             #print 'max accuracy: ',acc_max
             #print 'min accuracy: ',acc_min
@@ -314,7 +324,6 @@ def evaluate_online(logfolder, config, scope="model"):
     global mtest
     global delay
     global session
-    
     if FLAGS.ssh:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
         #des_dir = '/esat/'+FLAGS.machine+'/tmp/control_output/'
@@ -401,6 +410,14 @@ def evaluate_online(logfolder, config, scope="model"):
                         else :
                             FLAGS.fc_only = False
                             FLAGS.hidden_size=100
+                        if FLAGS.model_name == 'straight' :
+                            FLAGS.fly_straight = True
+                            FLAGS.model_name = 'dagger_4G_wsize_300'
+                            FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
+                        else:
+                            FLAGS.fly_straight = False
+                        if FLAGS.model_name=='finished':
+                            sys.exit(0)
                         g = None
                         mtest = None
                         g = tf.Graph()
@@ -411,6 +428,7 @@ def evaluate_online(logfolder, config, scope="model"):
                             saver = tf.train.Saver()
                             session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
                             saver.restore(session, FLAGS.model_dir+"/model.ckpt")
+                            local_state = session.run(mtest.initial_state)
                             last_feature='%s' % current_feature
                             raise Exception('loaded new network: '+FLAGS.model_name)
                             #import pdb; pdb.set_trace()
@@ -456,6 +474,8 @@ def evaluate_online(logfolder, config, scope="model"):
                         #print 'argmax output: ', max_index,' disc_factor: ',disc_factor
                         #import pdb; pdb.set_trace()
                         output_str=convert_control_output.translate_index(max_index, disc_factor)
+                    if FLAGS.fly_straight:
+                        output_str = "0.8 0 0 0 0 0"
                     print 'output: ', output_str
                     #import pdb;pdb.set_trace()
                     
@@ -468,7 +488,7 @@ def evaluate_online(logfolder, config, scope="model"):
                     frame=frame+1
                     #print "delay due to this feature: ", time.time()-delay
                 except Exception as e:
-                    print "[eval] skip feature due to error: ",e
+                    print "[eval] skip feature due to complication: ",e
         notifier.loop(callback=on_loop)
     
 
@@ -555,6 +575,10 @@ def main(unused_argv=None):
         #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set5_windowwise_sz_100_net_inception'
         #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception'
         FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
+        if FLAGS.fc_only:
+            FLAGS.hidden_size = 400
+        if FLAGS.network == 'stijn':
+            FLAGS.remote_features = 'depth_estimate'
         evaluate_online(logfolder, config)
     else:
         evaluate(logfolder, config)

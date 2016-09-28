@@ -2,32 +2,80 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-#TASK='pilot_CNN.py' 	#name of task in matlab to run
-TASK='pilot_train.py' 	#name of task in matlab to run
-#val=0			#id number of this condor task avoid overlap
+#TASK='pilot_CNN.py --chosen_set seq_oa_inc_fc' 	#wall_test
+#description="seq_oa_inc_fc_cnn_feats"
 
-#Wall challenge
+#_______________________________________________________
+TASK='pilot_train.py' 	#name of task in matlab to run
+
+####   depth_fc_dagger
+#model='depth_fc'
+#log_tag='seq' #d1
+#fine='True'
+#mod_dir='depth_fc_d1_fi_hsz_400_net_stijn_depth_fc'
+
+####   inc_fc_dagger
+# model='inc_fc'
+# log_tag='seq_d1' 
+# fine='True'
+# mod_dir='inc_fc_seq_hsz_400_fc'
+
+#_______________________________________________________
+#best to ask for 12G GPU
+andromeda='yes'
+
+# depth_lstm_dagger
+#model='depth_lstm'
+#log_tag='seq' #d1
+# fine='True'
+# mod_dir='depth_lstm_net_stijn_depth'
+
+# # # inc_lstm_dagger
+model='inc_lstm'
+log_tag='seq_d1_condor_debugging'
+fine='True'
+mod_dir='inc_lstm_seq'
+
+
+
+#_______________________________________________________
+#Corridor challenge
+#model='comb'
+#log_tag='corridor'
+
+
+#Wall challenge !!! Dont forget to preprocess!!!
 #model='cwall' #"$1"
-#log_tag="no_test" #tell python this is not a test so it is not including the testing tag
+#log_tag="d1" #tell python this is not a test so it is not including the testing tag
+#wsize="300"
+#bsize="2"
+#fine='True'
+#mod_dir='cwall_batchwise'
 
 #Wall challenge for different windowsizes and according batchsizes
-model='winwall' #"$1"
-wsize="$1"
-bsize="$2"
-log_tag="$3" #tell python this is not a test so it is not including the testing tag
+# model='winwall' #"$1"
+# wsize="$1"
+# bsize="$2"
+# log_tag="$3" #tell python this is not a test so it is not including the testing tag
 
-#Selection
+### SELECTED SEQUENTIAL TEST
 #model='seldat' #'cwall' #"$1"
-#log_tag="selected" #tell python this is not a test so it is not including the testing tag
+#log_tag="selected_30E" #tell python this is not a test so it is not including the testing tag
+#feature_type='depth_estimate' #"$5"
+#network='stijn' #"$6"
+#fc='True'
+#hidden_size='400'
+#bsize='500'
+
+# RANDOM OA TEST
+#model='dagger' #'cwall' #"$1"
+#log_tag="big" #tell python this is not a test so it is not including the testing tag
+#fc='True'
+#bsize='500'
+#hidden_size='400'
 #feature_type='depth_estimate' #"$5"
 #network='stijn' #"$6"
 
-
-#OA Inception On All Daggersets
-#model='dagger' #'cwall' #"$1"
-#log_tag="big" #tell python this is not a test so it is not including the testing tag
-#fine='True'
-#mod_dir='dagger_4G_wsize_300'
 
 #OA Stijns depth
 #model='dagger' #'cwall' #"$1"
@@ -35,19 +83,19 @@ log_tag="$3" #tell python this is not a test so it is not including the testing 
 #feature_type='depth_estimate' #"$5"
 #network='stijn' #"$6"
 
-#OA FC
+### 2 OA FC
 #model='dagger'
 #log_tag='no_test'
-#fc='True'
-#bsize='500'
+
 #fine='True'
 #mod_dir='dagger_hsz_400_fc'
 
-#Discrete session
-#model='dis'
-#log_tag='fine'
-#wsize='300'
-#bsize='1'
+#Expert session
+#model='expert'
+#log_tag='_2'
+#feature_type='depth_estimate' #"$5"
+#network='stijn' #"$6"
+
 
 #hidden_size='400' #"$2"
 #batchwise="$2"
@@ -64,7 +112,7 @@ log_tag="$3" #tell python this is not a test so it is not including the testing 
 #normalized="$5"
 #random_order="$2"
 
-description=""
+
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
 #------------------------------------
 if [ ! -z $model ]; then 
@@ -161,14 +209,20 @@ echo "RequestCpus      = 8" >> $condor_file
 echo "Request_GPUs = 1" >> $condor_file
 
 # ---4Gb option---
-echo "RequestMemory = 64427" >> $condor_file
+#echo "RequestMemory = 62000" >> $condor_file
+echo "RequestMemory = 15900" >> $condor_file
+if [ -z $andromeda ]; then
+echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
+else
+echo "Requirements = (CUDAGlobalMemoryMb >= 11000) && (CUDACapability >= 3.5)">> $condor_file
+fi
+# ---Trash option---
 #echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5) && (CUDADeviceName == \"GeForce GTX 960\" || CUDADeviceName == \"GeForce GTX 980\" )">> $condor_file
-echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
-#echo "Requirements = (CUDAGlobalMemoryMb >= 11000) && (CUDACapability >= 3.5)">> $condor_file
 
-# ---2Gb option---
 #echo "RequestMemory = 16G" >> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5) && (machineowner == \"Visics\") && (machine != \"amethyst.esat.kuleuven.be\" ) && (CUDADeviceName == 'GeForce GTX 960' || CUDADeviceName == 'GeForce GTX 980' )" >> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)" >> $condor_file
 
 echo "RequestDisk      = 25G" >> $condor_file
 #wall time ==> generally assumed a job should take 6hours longest,

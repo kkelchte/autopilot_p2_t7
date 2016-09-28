@@ -4,8 +4,10 @@ It defines a configuration class and uses the flags obtained from the test/train
 """
 import pilot_data
 import pilot_model
-
+#import xml.etree.cElementTree as ET
+from lxml import etree as ET
 import tensorflow as tf
+import os.path
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -76,8 +78,22 @@ def extract_logfolder():
         logfolder = logfolder + "_fc"
     if FLAGS.step_size_fnn != 1:
         logfolder = logfolder + "_stp_"+str(FLAGS.step_size_fnn)
-        
     return logfolder
+
+def save_config(logfolder, file_name = "configuration"):
+    """
+    save all the FLAG values in a config file / xml file
+    """
+    print "Save configuration in xml."
+    root = ET.Element("conf")
+    flg = ET.SubElement(root, "flags")
+    
+    flags_dict = FLAGS.__dict__['__flags']
+    for f in flags_dict:
+        #print f, flags_dict[f]
+        ET.SubElement(flg, f, name=f).text = str(flags_dict[f])
+    tree = ET.ElementTree(root)
+    tree.write(os.path.join(logfolder,file_name+".xml"), encoding="us-ascii", xml_declaration=True, method="xml", pretty_print=True)
 
 # the class with general empty class variables that are set by the code
 # and DEFAULT parameters of which i'm not playing around with yet.
@@ -108,6 +124,66 @@ class SmallConfig(Configuration):
         #FLAGS.network='stijn' #'inception'
         FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
         
+class DepthFCConfig(Configuration):
+    """depth fully connected layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        FLAGS.network = 'stijn'
+        FLAGS.feature_type = 'depth_estimate'
+        FLAGS.dataset='../../../emerald/tmp/remote_images/sequential_oa'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class DepthLSTMConfig(Configuration):
+    """depth LSTM layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 15
+        FLAGS.max_max_epoch = 30
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
+        FLAGS.network = 'stijn'
+        FLAGS.feature_type = 'depth_estimate'
+        FLAGS.dataset='../../../emerald/tmp/remote_images/sequential_oa'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class IncFCConfig(Configuration):
+    """inception fully connected layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        FLAGS.dataset='../../../emerald/tmp/remote_images/inc_fc_dagger'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class IncLSTMConfig(Configuration):
+    """depth LSTM layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 5 #15
+        FLAGS.max_max_epoch = 10 #30
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
+        FLAGS.dataset='../../../emerald/tmp/remote_images/inc_lstm_dagger'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()       
+
 class DaggerConfig(Configuration):
     """dagger config points to the huge dataset"""
     training_objects = ['0000']
@@ -117,27 +193,31 @@ class DaggerConfig(Configuration):
     def __init__(self):
         FLAGS.max_epoch = 15
         FLAGS.max_max_epoch = 30
-        FLAGS.max_num_windows = 2000 
-        #FLAGS.sliding_window = True
-        #FLAGS.skip_initial_state = True
+        #FLAGS.window_size = 300
+        FLAGS.fnn_batch_size = 1 
         if FLAGS.fc_only:
             FLAGS.hidden_size = 400
+            FLAGS.max_epoch = 50
+            FLAGS.max_max_epoch = 100
         FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
 
 class CombConfig(Configuration):
     """comb config points to the huge dataset and goes over it with different window sizes"""
-    training_objects = ['0000']
-    validate_objects = ['0001']
-    test_objects = ['0002']
+    training_objects = ['expert','expert1','expert2','expert3','expert4']
+    validate_objects = []
+    test_objects = ['expert']
         
     def __init__(self):
         # Each epoch is repeated for each window size
-        FLAGS.skip_initial_state = True #should be 210 / (7windowsizes * 3datasets) = 10 in order to get results after 10h on 4G gpu with initial state
-        FLAGS.max_epoch = 1
-        FLAGS.max_max_epoch = 5 
-        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.max_epoch = 15 # let the learning rate decay faster
+        FLAGS.max_max_epoch = 30
+        FLAGS.max_num_windows = 500 #Number of initial state calculations each epoch with windowwise learning 
+        FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
+        FLAGS.network='stijn' #'inception'
+        if FLAGS.fc_only:
+            FLAGS.hidden_size = 400
+        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_esat'
         
 class SelectedConfig(Configuration):
     """continue config, for images from laptop with oa."""
@@ -148,9 +228,11 @@ class SelectedConfig(Configuration):
     def __init__(self):
         FLAGS.max_epoch = 15 # let the learning rate decay faster
         FLAGS.max_max_epoch = 30
-        FLAGS.max_num_windows = 2000 #Number of initial state calculations each epoch with windowwise learning (100~1min)
         FLAGS.dataset='../../../emerald/tmp/remote_images/selected'
         #FLAGS.dataset='../../../emerald/tmp/remote_images/one_world_clean'
+        if FLAGS.fc_only:
+            FLAGS.hidden_size = 400
+        
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
         
@@ -161,11 +243,14 @@ class WallConfig(Configuration):
     test_objects = ['0002_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 2 #15
-        FLAGS.max_max_epoch =  5 #30
+        FLAGS.max_epoch = 15
+        FLAGS.max_max_epoch = 30
         FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         FLAGS.batchwise_learning = True
+        FLAGS.finetune = True
+        FLAGS.init_model_dir= '/esat/qayd/kkelchte/tensorflow/lstm_logs/cwall_batchwise'
+
 
 class WallWindowConfig(Configuration):
     """wall config, small set for testing memory stretching"""
@@ -174,10 +259,26 @@ class WallWindowConfig(Configuration):
     test_objects = ['0012_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 50 #15
-        FLAGS.max_max_epoch =  200 #30
+        FLAGS.max_epoch = 20 #15
+        FLAGS.max_max_epoch =  50 #30
         FLAGS.dataset='../../../emerald/tmp/remote_images/wall_expert'
-
+        
+class ExpertConfig(Configuration):
+    """Expert on random wall challenges."""
+    training_objects = ['0000'] 
+    validate_objects = ['0001']
+    test_objects = ['0002']
+    
+    def __init__(self):
+        FLAGS.max_epoch = 15 #50
+        FLAGS.max_max_epoch = 30
+        FLAGS.dataset='../../../emerald/tmp/remote_images/continuous_expert'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.window_size = 300
+        FLAGS.batch_size_fnn = 2
+        FLAGS.max_num_threads = 5
+        #FLAGS.sliding_window = True
+        
 #### Old configurations        
 class DiscreteConfig(Configuration):
     """discrete labels for the OA challenge."""
@@ -267,8 +368,8 @@ def get_config():
         config = DumpsterConfig()
     elif FLAGS.model == "test":
         config = TestConfig()
-    elif FLAGS.model == "dis":
-        config = DiscreteConfig()
+    elif FLAGS.model == "expert":
+        config = ExpertConfig()
     elif FLAGS.model == "seldat":
         config = SelectedConfig()
     elif FLAGS.model == "cwall":
@@ -277,6 +378,14 @@ def get_config():
         config = WallWindowConfig()
     elif FLAGS.model == "dagger":
         config = DaggerConfig()
+    elif FLAGS.model == "depth_fc":
+        config = DepthFCConfig()
+    elif FLAGS.model == "depth_lstm":
+        config = DepthLSTMConfig()
+    elif FLAGS.model == "inc_fc":
+        config = IncFCConfig()
+    elif FLAGS.model == "inc_lstm":
+        config = IncLSTMConfig()
     else:
         config = Configuration()
     # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN

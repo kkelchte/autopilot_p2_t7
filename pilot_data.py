@@ -199,12 +199,15 @@ def prepare_data(data_objects):
         feature_types = [FLAGS.feature_type]
     # loop over trajectories
     for data_object in data_objects:
-        directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
+        #directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
+        object_name = os.path.basename(data_object)
         #real labels from file or from RGB-directory
         if FLAGS.read_from_file:
-            labels_obj = get_labels_from_file(directory)
+            #labels_obj = get_labels_from_file(directory)
+            labels_obj = get_labels_from_file(data_object)
         else:
-            labels_obj = get_labels_from_directory(directory)
+            #labels_obj = get_labels_from_directory(directory)
+            labels_obj = get_labels_from_directory(data_object)
         if not FLAGS.one_hot:
             labels_obj = create_one_hot_labels(labels_obj)
             
@@ -213,11 +216,14 @@ def prepare_data(data_objects):
         feats_obj = []        
         for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
             if FLAGS.network == 'pcnn': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'.mat', FLAGS.network)
+                #feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'.mat', FLAGS.network)
+                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'.mat', FLAGS.network)
             elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy' or FLAGS.network == 'stijn': 
-                feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
+                #feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
+                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'_'+FLAGS.network+'.mat', FLAGS.network)
             else: raise DataError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
+        #import pdb; pdb.set_trace()
         #flow is on 2RBG images ==> skip first label to be equal
         if 'flow' in feature_types:
             labels_obj = labels_obj[1:]
@@ -293,7 +299,7 @@ def prepare_data_list(data_objects):
     """
     object_list = []
     for d_object in data_objects:
-        print "object: ",d_object
+        print "object: ",os.path.basename(d_object)
         object_data, object_labels = prepare_data([d_object])
         object_tuple = (object_data, object_labels)
         object_list.append(object_tuple)
@@ -435,9 +441,11 @@ def get_list(directory,filename):
     list_o = list_f.readlines()
     # cut the newline at the end
     list_o = [l[:-1] for l in list_o]
-    #import pdb; pdb.set_trace()
+    
     # cut the path, keep the name
-    list_o = [os.path.basename(l) for l in list_o]
+    #list_o = [os.path.basename(l) for l in list_o]
+    # or .. keep the path
+    
     return list_o
 
 def pick_random_windows(data_list, window_sizes, batch_sizes):
@@ -469,7 +477,8 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
     d_num_frames = sum([ data_list[t][0].shape[0]*data_list[t][0].shape[1] for t in range(len(data_list))])
     b_scale = max([1, int(d_num_frames/b_num_frames)]) #number of times the window-batches are repeated in one epoch
     if FLAGS.max_num_windows > max(batch_sizes):
-        b_scale = min(b_scale, FLAGS.max_num_windows/max(batch_sizes)) #define max number of initial_state calculations for one epoch
+    	if not FLAGS.fc_only:
+	        b_scale = min(b_scale, FLAGS.max_num_windows/max(batch_sizes)) #define max number of initial_state calculations for one epoch
     else:#max_num_windows is set smaller than batch size so don't scale further.
         b_scale = 1
     print "multiply window batches ",b_scale," times in one epoch."
@@ -515,28 +524,24 @@ def pick_sliding_windows(data_list, window_sizes, batch_sizes):
     total_indices = [] #to be returned in the end
     for wi in range(len(window_sizes)):#outer list over models
     	#create list of tuples of movie and batch indices with movies longer than the required size
-    	possible_movies=[ (ti, bi) for ti in range(len(data_list)) for bi in range(data_list[ti][0].shape[0]) if data_list[ti][0].shape[1] > (2*window_sizes[wi])]
+    	possible_movies=[ ti for ti in range(len(data_list)) if data_list[ti][0].shape[1] > (window_sizes[wi])]
     	#print possible_movies
     	if len(possible_movies) == 0:
     		raise SyntaxError('Windowsize '+str(window_sizes[wi])+' is too big for this set of data ['+str(max([data_list[i][0].shape[1] for i in range(len(data_list))]))+' max]. Consider using fully unrolled option with --batchwise_learning True.')
-    	
-    	#choose the tuples from which the window is picked
-    	b_indices = [] #an array of indices for 1 batch for this window size
-    	for bi in range(batch_sizes[wi]):
-    		tup_ind, mov_ind = random.choice(possible_movies)
-    		start_ind = random.choice(range( data_list[tup_ind][0].shape[1]-2*window_sizes[wi]))
+    	b_indices = []
+    	#choose the tuples over which the time window is slided
+    	tup_ind = random.choice(possible_movies)
+    	start_ind = 0
+    	for mov_ind in range(data_list[tup_ind][0].shape[0]):
     		b_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
     	b_indices = np.concatenate(b_indices)
-    	#if start_ind
     	#fill in the local indices while incrementing the start index
     	local_indices = [] #list of length of the window with tuples corresponding to this window. The start index is shifted each time.
-    	#import pdb; pdb.set_trace()
-    	for li in range(window_sizes[wi]):
+    	for li in range(data_list[tup_ind][0].shape[1]-window_sizes[wi]):#take start indices up until the window_length-last frame
     		b_indices_shifted = np.array(b_indices)
     		b_indices_shifted[:,2]+=li
     		local_indices.append(b_indices_shifted)
     		#import pdb; pdb.set_trace()
-    	if len(local_indices) != window_sizes[wi]: raise ValueError('Failed to append full sliding window to local_indices.')
     	total_indices.append(local_indices)
     return total_indices
 
@@ -594,11 +599,11 @@ if __name__ == '__main__':
     #trainingset = prepare_data_grouped(training_objects)
     trainingset = prepare_data_list(['0000', '0010'])
     
-    window_sizes=[4]
+    window_sizes=[40]
     batch_sizes=[6]
     
     indices = pick_sliding_windows(trainingset, window_sizes, batch_sizes)
-    #import pdb; pdb.set_trace()
+    import pdb; pdb.set_trace()
     #print type(trainingset)
     
     #training_data, training_labels = prepare_data(training_objects, sample_step=100, feature_type='both')

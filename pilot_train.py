@@ -213,7 +213,7 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
         # the inner nested list corresponds to different tuples for that model according to the size of the data
         # the more the data ==> the more index tuples in the inner list
         # the bigger the gpu ==> the more models ==> the larger the outer list
-        if FLAGS.sliding_window: #Still broken because steps only over the window length instead of the full sequence
+        if FLAGS.sliding_window:
             window_indices = pilot_data.pick_sliding_windows(data_list, window_sizes, batch_sizes)
         else:
             window_indices = pilot_data.pick_random_windows(data_list, window_sizes, batch_sizes)
@@ -222,10 +222,11 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
         # get the initial innerstate of the models according to the windows
         if not FLAGS.fc_only: 
             before_time = time.time()
-            all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
-            #print 'new duration', print_time(before_time)
-            #after_time = time.time()
-            #all_initial_states_old = pilot_eval.get_initial_states_old(models, window_indices, mvalid, data_list, session)
+            #if the total number of initial state calculation is bigger than 200, do it multi threaded
+            if sum([len(window_indices[i])*window_indices[i][0].shape[0] for i in range(len(window_indices))]) > 20:
+                all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
+            else: #calculate initial states single threaded
+                all_initial_states = pilot_eval.get_initial_states_single(models, window_indices, mvalid, data_list, session)
             #print 'old duration', print_time(after_time), ' from ',print_time(before_time)
             #import pdb; pdb.set_trace()
             #if np.amax(all_initial_states[0][0]-all_initial_states_old[0][0]) != 0:
@@ -380,7 +381,10 @@ def main(_):
     
     print 'Logfolder: ', logfolder
     os.mkdir(logfolder)
+    #save configuration
+    pilot_settings.save_config(logfolder)
     
+    #import pdb; pdb.set_trace()
     # List of sorted(already done in txt file) tuples (data, labels), each tuple corresponds to one training movie
     # data is an array of shape [batch_of_movies, movie_length, feature_dimension]
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
@@ -388,7 +392,8 @@ def main(_):
     training_data_list = pilot_data.prepare_data_general(config.training_objects)
     #else : training_data_list = pilot_data.prepare_data_list(config.training_objects)
     #validation set is always one movie with batchsize one and tested with stepsize 1
-    validate_data_list = pilot_data.prepare_data_list(config.validate_objects)
+    if len(config.validate_objects) != 0:
+        validate_data_list = pilot_data.prepare_data_list(config.validate_objects)
     print 'loaded data, ',print_time(data_time)
     
     #set params according to the shape of the obtained data
@@ -408,11 +413,13 @@ def main(_):
         batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
         window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
     else: # in case of windowwise learning
-        window_sizes = [50, 100, 500] 
-        batch_sizes = [30, 15, 3] #12G
+        #window_sizes = [50, 100, 500] 
+        #batch_sizes = [30, 15, 3] #12G
         
-        #window_sizes = [1, 10, 100]
-        #batch_sizes = [200, 20, 2] 
+        #window_sizes = [50, 100, 500]#4G
+        #batch_sizes = [10, 5, 1] 
+        window_sizes = [20, 40, 80]#4G
+        batch_sizes = [32, 16, 8]
         
         #window_sizes = [300, 100, 30]
         #batch_sizes = [2, 5, 15] 
@@ -463,7 +470,7 @@ def main(_):
                         #mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
                                                 #config.batch_size, config.num_steps, 'train')
                         #trainingmodels.append(mtrain)       
-                #FLAGS.gpu = False
+                FLAGS.gpu = False
                 mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
             
             print "Loading models finished... ", print_time(start_time)
@@ -519,17 +526,17 @@ def main(_):
                 writer = None
                 validate = False #only validate at some points during traing but not every epoch
                 # write different epochs away as different logs in a logarithmic range till max_max_epoch
-                if current_epoch in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,2,5]):
+                #if current_epoch in (b*10**exp for exp in range(1+int(math.log(FLAGS.max_max_epoch,10))) for b in [1,2,5]):
+                if current_epoch in [1,2,5,10,20,50,100]:
                     if current_epoch!= 1:
                         #delete logdata of previous run except for the first run
                         location = logfolder+"/e"+str(current_epoch)
                         shutil.rmtree(location,ignore_errors=True) #it might delete the wrong folder...		
-                    current_epoch = current_epoch
                     #Dont validate, in an obstacle world that doesn't make sense
                     validate=True
                     #print "save epoch: ", current_epoch+1
                     location = logfolder+"/e"+str(current_epoch)
-                    writer = tf.train.SummaryWriter(location, graph=session.graph)
+                    #writer = tf.train.SummaryWriter(location, graph=session.graph)
                 #Always validate the last run
                 if current_epoch == (FLAGS.max_max_epoch-1):
                     validate=True
@@ -537,58 +544,54 @@ def main(_):
                 #Train
                 train_results = []
                 epoch_time=time.time()
-                train_results = run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, current_epoch, writer, [window_sizes[windex]], [batch_sizes[windex]], mvalid)
+                if FLAGS.batchwise_learning:
+                    train_results = run_epoch(True, session, trainingmodels, [training_data_list[windex]], config, logfolder, current_epoch, writer, [window_sizes[windex]], [batch_sizes[windex]], mvalid)
+                else:
+                    train_results = run_epoch(True, session, trainingmodels, training_data_list, config, logfolder, current_epoch, writer, [window_sizes[windex]], [batch_sizes[windex]], mvalid)
                 print "Training finished... ", print_time(epoch_time), "."
+                scores = [mres[0] for mres in train_results]
+                losses = [mres[1] for mres in train_results]
+                print("Epoch: %d Average loss over different unrolled models: %f, Max: %f, Min: %f. Average score: %f, Max: %f, Min: %f" % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses),sum(scores)/len(scores),max(scores),min(scores)))
+                #write final validation away in txt file.
+                if current_epoch == (FLAGS.max_max_epoch-1):
+                    f = open(logfolder+"/results.txt", 'a')
+                    f.write('training: Average loss: %f, Max: %f, Min: %f.\n' % (sum(losses)/len(losses),max(losses),min(losses)))
+                    f.close()
+                
+                # write away results of this epoch
+                if writer_overview: 
+                    feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses), average_score: sum(scores)/len(scores), max_score: max(scores), min_score: min(scores)}
+                    summary_str = session.run(merge, feed_dict)
+                    writer_overview.add_summary(summary_str, current_epoch+windex*FLAGS.max_max_epoch)
                 
                 #only validate in few cases as it takes a lot of time setting the network on the GPU and evaluating all the movies
-                if validate or FLAGS.validate_always:
+                if (validate or FLAGS.validate_always) and len(config.validate_objects)!= 0:
                     val_results = []
                     #Validate
                     epoch_time=time.time()
                     val_results = run_epoch(False, session, [mvalid], validate_data_list, config, logfolder, current_epoch, writer)
                     print "Validation finished... ",print_time(epoch_time)
-                
-                # write away results of this epoch
-                if writer_overview: 
-                    scores = [mres[0] for mres in train_results]
-                    losses = [mres[1] for mres in train_results]
-                    feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses), average_score: sum(scores)/len(scores), max_score: max(scores), min_score: min(scores)}
-                    print("Epoch: %d Average score over different unrolled models: %f, Max: %f, Min: %f. Average Loss: %f, Max: %f, Min: %f" % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses),sum(scores)/len(scores),max(scores),min(scores)))
-                    #if FLAGS.continuous:
-                        #scores = [mres[0] for mres in train_results]
-                        #losses = [mres[1] for mres in train_results]
-                        #feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
-                        #print("Epoch: %d Average loss over different unrolled models: %f, Max: %f, Min: %f." % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses)))
-                    #else:#continuous case
-                        #accuracies = [mres[0]/mres[2] for mres in train_results]
-                        #losses = [mres[1] for mres in train_results]
-                        #feed_dict = {accuracy_av : sum(accuracies)/len(accuracies), accuracy_max: max(accuracies), accuracy_min: min(accuracies), loss_av: sum(losses)/len(losses)}
-                        #print("Epoch: %d Average Accuracy over different unrolled models: %f, Max: %f, Min: %f, Loss: %f." % (current_epoch + 1, sum(accuracies)/len(accuracies), max(accuracies), min(accuracies), sum(losses)/len(losses)))
-                    summary_str = session.run(merge, feed_dict)
-                    writer_overview.add_summary(summary_str, current_epoch*(1+windex)+windex*FLAGS.max_max_epoch)
-                    
-                    #get max loss, min loss and average loss from model results
-                    #av_loss = sum(losses)/len(losses)
-                    #max_loss = max(losses)
-                    #feed_dict = {average_loss: sum(losses)/len(losses), max_loss: max(losses), min_loss: min(losses)}
-                    #print 'add epoch summary: ', epoch_index        		
-                    #writer_overview.add_summary(summary_str, epoch_index)
-                    #summary_str = session.run(acc_max_min_sum,{accuracy_max_min: acc_min})
-                    #
-                    #print("Epoch: %d Final Score: %.3f, Max: %.3f at index %d, Min: %.3f at index %d." % (epoch_index + 1, acc , acc_max, winner_index, acc_min, lozer_index))
-                    #print("Epoch: %d Average Loss over different unrolled models: %f, Max: %f, Min: %f." % (epoch_index + 1, sum(losses)/len(losses), max(losses), min(losses)))
+                    scores = [mres[0] for mres in val_results]
+                    losses = [mres[1] for mres in val_results]
+                    print("Epoch: %d Average loss over different unrolled models: %f, Max: %f, Min: %f. Average score: %f, Max: %f, Min: %f" % (current_epoch + 1,sum(losses)/len(losses),max(losses),min(losses),sum(scores)/len(scores),max(scores),min(scores)))
+                    #write final validation away in txt file.
+                    if current_epoch == (FLAGS.max_max_epoch-1):
+                        f = open(logfolder+"/results.txt", 'a')
+                        f.write('validation: Average loss: %f, Max: %f, Min: %f.\n' % (sum(losses)/len(losses),max(losses),min(losses)))
+                        f.close()
                     
                 sys.stdout.flush()
                 #save session every 100Es 
-                #if (current_epoch%50) == 0:
-                if os.path.isfile(logfolder+"/model.ckpt"):
-                    os.remove(logfolder+"/model.ckpt")
-                # Save the variables to disk.
-                save_path = saver.save(session, logfolder+"/model.ckpt")
-                print("Model %d saved in file: %s" %( current_epoch*(1+windex), save_path ))
-                # Use this model for finetuning in case of several windowsizes:
-                head, FLAGS.init_model_dir = os.path.split(logfolder)
-                FLAGS.finetune = True
+                #if (current_epoch%5) == 0 or (current_epoch==FLAGS.max_max_epoch-1) or (current_epoch == 2):
+                if current_epoch==FLAGS.max_max_epoch-1:
+                    if os.path.isfile(logfolder+"/model.ckpt"):
+                        os.remove(logfolder+"/model.ckpt")
+                    # Save the variables to disk.
+                    save_path = saver.save(session, logfolder+"/model.ckpt")
+                    print("Model %d saved in file: %s" %( current_epoch+windex*FLAGS.max_max_epoch, save_path ))
+                    # Use this model for finetuning in case of several windowsizes:
+                    head, FLAGS.init_model_dir = os.path.split(logfolder)
+                    FLAGS.finetune = True
             # Free all memory after training
             session.close()
             saver = None

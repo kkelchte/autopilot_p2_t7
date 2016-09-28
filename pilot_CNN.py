@@ -6,7 +6,7 @@ In this case the inception network trained on imagenet.
 import os, sys, re
 import tensorflow as tf
 from os import listdir
-from os.path import isfile,join
+from os.path import isfile,join,isdir
 import numpy as np
 from PIL import Image
 import string
@@ -101,15 +101,15 @@ def extract_offline():
     Extract CNN features of appearance and flow images using the inception google network 
     pretrained on imagenet.
     '''
-    #chosen_set='wall_expert_fixed'
     if len(FLAGS.chosen_set) != 0:
         chosen_set=FLAGS.chosen_set
     else:
-        chosen_set='dagger2'
+        chosen_set=''
     
     movies_dir=FLAGS.data_dir_offline+chosen_set
     
-    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures")]
+    movies=[mov for mov in sorted(listdir(movies_dir)) if (isdir(join(movies_dir, mov)) and mov != "cache" and mov != "val_set.txt" and mov != "train_set.txt" and mov != "test_set.txt" and mov != "notify.sh" and mov != "set_1" and mov != "set_2" and mov != "set_online" and mov != "set_3" and mov != "failures" and mov!='log' and mov != 'expert')]
+    
     #if len(FLAGS.movie) != 0:
         #movies = [FLAGS.movie]
     #else:
@@ -152,25 +152,26 @@ def extract_offline():
                 features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                 features = np.squeeze(features)
                 movie_features_app.append(features)
-            movie_features_flow = []
-            #flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
-            #### CHANGED FLOW INTO DEPTH 28-7-2016 ###
-            flow_images=[img for img in sorted(listdir(join(movies_dir,m,'depth'))) if isfile(join(movies_dir,m,'depth',img))]
-            for img in flow_images:
-                #FLOW
-                flowfile = join(movies_dir,m,'depth',img)
-                image_data = tf.gfile.FastGFile(flowfile, 'rb').read()
-                features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
-                features = np.squeeze(features)
-                movie_features_flow.append(features)
             movie_features_app = np.concatenate([movie_features_app])
-            movie_features_flow = np.concatenate([movie_features_flow])
-            #import pdb; pdb.set_trace()
             d = {'features': movie_features_app, 'object': m}
             sio.savemat(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
-            d = {'features': movie_features_flow, 'object': m}
-            #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
-            sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+
+            if isdir(join(movies_dir,m,'depth')):
+                movie_features_flow = []
+                #flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
+                flow_images=[img for img in sorted(listdir(join(movies_dir,m,'depth'))) if isfile(join(movies_dir,m,'depth',img))]
+                for img in flow_images:
+                    #FLOW
+                    flowfile = join(movies_dir,m,'depth',img)
+                    image_data = tf.gfile.FastGFile(flowfile, 'rb').read()
+                    features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
+                    features = np.squeeze(features)
+                    movie_features_flow.append(features)
+                movie_features_flow = np.concatenate([movie_features_flow])
+                #import pdb; pdb.set_trace()
+                d = {'features': movie_features_flow, 'object': m}
+                #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+                sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             
             print 'Duration of last movie: ', print_time(starttime), '. Estimated time: ', print_duration(int((time.time()-starttime)*(len(movies)-i)))
         
@@ -186,6 +187,7 @@ def extract_online():
     '''
     #source_dir='/esat/sadr/tmp/remote_images/'#Dont forget to adapt sshfs bridge on laptop as well if i use different source folder.
     source_dir=FLAGS.data_dir_online+'/RGB'
+    print source_dir
     #source_dir='/esat/qayd/kkelchte/simulation/remote_images/'
     #source_dir='/esat/qayd/kkelchte/simulation/remote_images_qayd/'
     if FLAGS.ssh:
