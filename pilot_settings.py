@@ -118,8 +118,8 @@ class SmallConfig(Configuration):
         FLAGS.sample = 10
         FLAGS.num_layers = 1
         FLAGS.hidden_size = 10 #dimensionality of cell state and output
-        FLAGS.max_epoch = 1
-        FLAGS.max_max_epoch = 2
+        FLAGS.max_epoch = 5
+        FLAGS.max_max_epoch = 10
         #FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
         #FLAGS.network='stijn' #'inception'
         FLAGS.dataset='tiny_set'

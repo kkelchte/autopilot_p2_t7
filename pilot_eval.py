@@ -14,11 +14,12 @@ import scipy.io as sio
 import sys
 import pyinotify
 
-import os, shutil
+import os, shutil, os.path
 import re
  
 import matplotlib.pyplot as plt
 import copy
+from lxml import etree as ET
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -49,6 +50,10 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_integer(
     "max_num_threads", 10,
     "Set the maximum number of threads according to the size of the GPU. (20 is ok for 4G)")
+tf.app.flags.DEFINE_string(
+    "checkpoint_name", "model.ckpt",
+    "pick which checkpoint you want to restore.")
+
 
 
 #global variable feature bucket is a buffer used by the eventhandler to collect new arrived features as a list of paths
@@ -354,11 +359,11 @@ def evaluate_online(logfolder, config, scope="model"):
         saver = tf.train.Saver()
         # Start session
         session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-        saver.restore(session, FLAGS.model_dir+"/model.ckpt")
-        print "model restored", FLAGS.model_dir+"/model.ckpt"
+        saver.restore(session, os.path.join(FLAGS.model_dir, FLAGS.checkpoint_name))
+        print "model restored", FLAGS.model_dir+"/"+FLAGS.checkpoint_name
         #time.sleep(25)
         location = logfolder+"/eval"
-        writer = tf.train.SummaryWriter(location, graph=session.graph)
+        #writer = tf.train.SummaryWriter(location, graph=session.graph)
         #get the shape of the inner state of the model
         if not FLAGS.fc_only:
             local_state = session.run(mtest.initial_state)
@@ -565,20 +570,27 @@ def main(unused_argv=None):
 
     FLAGS.model = 'remote'
     logfolder = pilot_settings.extract_logfolder()
-    print 'logfolder',logfolder
+    #print 'logfolder',logfolder
     config = pilot_settings.get_config()
     
     if FLAGS.online:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
         empty_folder(source_dir)
         FLAGS.ssh = True
-        #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set5_windowwise_sz_100_net_inception'
-        #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/remote_set7_sz_100_net_inception'
         FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
-        if FLAGS.fc_only:
-            FLAGS.hidden_size = 400
-        if FLAGS.network == 'stijn':
-            FLAGS.remote_features = 'depth_estimate'
+        if os.path.isfile(os.path.join(FLAGS.model_dir, 'configuration.xml')):
+            print 'parsing configuration file...'
+            tree=ET.parse(os.path.join(FLAGS.model_dir, 'configuration.xml'))
+            root=tree.getroot()
+            flgs=root.find('flags')
+            for flg in flgs:
+                FLAGS.__dict__['__flags'][flg.tag] = flg.text
+        #import pdb; pdb.set_trace()
+        else:
+            if FLAGS.fc_only:
+                FLAGS.hidden_size = 400
+            if FLAGS.network == 'stijn':
+                FLAGS.remote_features = 'depth_estimate'
         evaluate_online(logfolder, config)
     else:
         evaluate(logfolder, config)

@@ -571,16 +571,20 @@ def main(_):
                     
                 sys.stdout.flush()
                 #save session every 5Es 
-                #if (current_epoch%5) == 0 or (current_epoch==FLAGS.max_max_epoch-1) or (current_epoch == 2):
-                if current_epoch==FLAGS.max_max_epoch-1:
-                    if os.path.isfile(logfolder+"/model.ckpt"):
-                        shutil.move(logfolder+"/model.ckpt", logfolder+"/model_"+str(current_epoch+windex*FLAGS.max_max_epoch)+".ckpt")
+                if ((current_epoch+1)%5) == 0 or (current_epoch==FLAGS.max_max_epoch-1):
+                #if current_epoch==FLAGS.max_max_epoch-1:
+                    #if os.path.isfile(logfolder+"/model.ckpt"):
+                        #shutil.move(logfolder+"/model.ckpt", logfolder+"/model_"+str(current_epoch+windex*FLAGS.max_max_epoch)+".ckpt")
                     # Save the variables to disk.
-                    save_path = saver.save(session, logfolder+"/model.ckpt")
+                    save_path = saver.save(session, logfolder+"/model_"+str(current_epoch+windex*FLAGS.max_max_epoch)+".ckpt")
                     print("Model %d saved in file: %s" %( current_epoch+windex*FLAGS.max_max_epoch, save_path ))
                     # Use this model for finetuning in case of several windowsizes:
                     head, FLAGS.init_model_dir = os.path.split(logfolder)
                     FLAGS.finetune = True
+            if os.path.isfile(logfolder+"/model.ckpt"):
+                os.remove(logfolder+"/model.ckpt")
+            save_path = saver.save(session, logfolder+"/model.ckpt")
+            print("Model %d saved in file: %s" %( current_epoch+windex*FLAGS.max_max_epoch, save_path ))
             # Free all memory after training
             session.close()
             saver = None
@@ -592,8 +596,7 @@ def main(_):
     # Free some memory
     training_data_list = None
     validate_data_list = None
-    #if os.path.isfile(logfolder+"/model.ckpt"):
-        #os.remove(logfolder+"/model.ckpt")
+
     ## Save the variables to disk.
     #save_path = saver.save(session, logfolder+"/model.ckpt")
     #print("Final model saved in file: %s" % save_path)
