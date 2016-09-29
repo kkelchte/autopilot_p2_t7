@@ -122,7 +122,7 @@ class SmallConfig(Configuration):
         FLAGS.max_max_epoch = 2
         #FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
         #FLAGS.network='stijn' #'inception'
-        FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
+        FLAGS.dataset='tiny_set'
         
 class DepthFCConfig(Configuration):
     """depth fully connected layers trained on sequential OA dataset"""
@@ -138,7 +138,7 @@ class DepthFCConfig(Configuration):
         FLAGS.hidden_size = 400
         FLAGS.network = 'stijn'
         FLAGS.feature_type = 'depth_estimate'
-        FLAGS.dataset='../../../emerald/tmp/remote_images/sequential_oa'
+        FLAGS.dataset='sequential_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class DepthLSTMConfig(Configuration):
@@ -153,7 +153,7 @@ class DepthLSTMConfig(Configuration):
         FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
         FLAGS.network = 'stijn'
         FLAGS.feature_type = 'depth_estimate'
-        FLAGS.dataset='../../../emerald/tmp/remote_images/sequential_oa'
+        FLAGS.dataset='sequential_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class IncFCConfig(Configuration):
@@ -163,12 +163,12 @@ class IncFCConfig(Configuration):
     test_objects = ['sequential_oa_0008_0_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 50
+        FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
         FLAGS.max_max_epoch = 100
         FLAGS.batch_size_fnn = 100
         FLAGS.fc_only = True
         FLAGS.hidden_size = 400
-        FLAGS.dataset='../../../emerald/tmp/remote_images/inc_fc_dagger'
+        FLAGS.dataset='inc_fc_dagger'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class IncLSTMConfig(Configuration):
@@ -178,10 +178,10 @@ class IncLSTMConfig(Configuration):
     test_objects = ['sequential_oa_0008_0_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 5 #15
-        FLAGS.max_max_epoch = 10 #30
-        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
-        FLAGS.dataset='../../../emerald/tmp/remote_images/inc_lstm_dagger'
+        FLAGS.max_epoch = 15
+        FLAGS.max_max_epoch = 30
+        FLAGS.max_num_threads = 40 #for 4G gpu should be ok?
+        FLAGS.dataset='inc_lstm_dagger'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()       
 
 class DaggerConfig(Configuration):
@@ -199,7 +199,7 @@ class DaggerConfig(Configuration):
             FLAGS.hidden_size = 400
             FLAGS.max_epoch = 50
             FLAGS.max_max_epoch = 100
-        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_total'
+        FLAGS.dataset='dagger_total'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
 
 class CombConfig(Configuration):
@@ -217,7 +217,8 @@ class CombConfig(Configuration):
         FLAGS.network='stijn' #'inception'
         if FLAGS.fc_only:
             FLAGS.hidden_size = 400
-        FLAGS.dataset='../../../emerald/tmp/remote_images/dagger_esat'
+        FLAGS.dataset='dagger_esat'
+        
         
 class SelectedConfig(Configuration):
     """continue config, for images from laptop with oa."""
@@ -228,8 +229,7 @@ class SelectedConfig(Configuration):
     def __init__(self):
         FLAGS.max_epoch = 15 # let the learning rate decay faster
         FLAGS.max_max_epoch = 30
-        FLAGS.dataset='../../../emerald/tmp/remote_images/selected'
-        #FLAGS.dataset='../../../emerald/tmp/remote_images/one_world_clean'
+        FLAGS.dataset='selected'
         if FLAGS.fc_only:
             FLAGS.hidden_size = 400
         
@@ -392,7 +392,11 @@ def get_config():
     # this means FLAGS.fc_only is true and the default values change
     if FLAGS.fc_only: #data is extracted in the same way as normal time-window-batches but with window size 1.
         FLAGS.batchwise_learning = False
-        
+    if not os.path.isdir(config.training_objects[0]):
+        print 'concatenate root and dataset to training objects as full path is not given.'
+        config.training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in config.training_objects]
+        config.validate_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in config.validate_objects]
+        config.test_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in config.test_objects]
     return config
 if __name__ == '__main__':
     print 'None'

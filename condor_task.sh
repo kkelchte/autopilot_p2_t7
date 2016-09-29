@@ -15,28 +15,26 @@ TASK='pilot_train.py' 	#name of task in matlab to run
 #mod_dir='depth_fc_d1_fi_hsz_400_net_stijn_depth_fc'
 
 ####   inc_fc_dagger
-# model='inc_fc'
-# log_tag='seq_d1' 
-# fine='True'
-# mod_dir='inc_fc_seq_hsz_400_fc'
+model='inc_fc'
+log_tag='seq_d3' 
+fine='True'
+mod_dir='inc_fc_seq_d2_fi_hsz_400_fc'
 
 #_______________________________________________________
 #best to ask for 12G GPU
-andromeda='yes'
+
+# # # inc_lstm_dagger
+# andromeda='yes'
+# model='inc_lstm'
+# log_tag='seq_d1'
+# fine='True'
+# mod_dir='inc_lstm_seq'
 
 # depth_lstm_dagger
 #model='depth_lstm'
 #log_tag='seq' #d1
 # fine='True'
 # mod_dir='depth_lstm_net_stijn_depth'
-
-# # # inc_lstm_dagger
-model='inc_lstm'
-log_tag='seq_d1_condor_debugging'
-fine='True'
-mod_dir='inc_lstm_seq'
-
-
 
 #_______________________________________________________
 #Corridor challenge
@@ -209,13 +207,14 @@ echo "RequestCpus      = 8" >> $condor_file
 echo "Request_GPUs = 1" >> $condor_file
 
 # ---4Gb option---
-#echo "RequestMemory = 62000" >> $condor_file
-echo "RequestMemory = 15900" >> $condor_file
 if [ -z $andromeda ]; then
+echo "RequestMemory = 15900" >> $condor_file
 echo "Requirements = (CUDAGlobalMemoryMb >= 1900) && (CUDACapability >= 3.5)">> $condor_file
 #echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
 else
-echo "Requirements = (CUDAGlobalMemoryMb >= 11000) && (CUDACapability >= 3.5)">> $condor_file
+echo "RequestMemory = 62000" >> $condor_file
+echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5)">> $condor_file
+#echo "Requirements = (CUDAGlobalMemoryMb >= 11000) && (CUDACapability >= 3.5)">> $condor_file
 fi
 # ---Trash option---
 #echo "Requirements = (CUDAGlobalMemoryMb >= 3900) && (CUDACapability >= 3.5) && (CUDADeviceName == \"GeForce GTX 960\" || CUDADeviceName == \"GeForce GTX 980\" )">> $condor_file

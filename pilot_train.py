@@ -495,7 +495,6 @@ def main(_):
             # define overview_writer
             # create some tensor op for calculating and keeping the accuracy/loss over different epochs
             writer_overview= tf.train.SummaryWriter(logfolder+'/overview'+str(windex), graph=session.graph) 
-            #if FLAGS.continuous:
             average_loss=tf.placeholder(tf.float32)
             max_loss=tf.placeholder(tf.float32)
             min_loss=tf.placeholder(tf.float32)
@@ -509,16 +508,6 @@ def main(_):
             ma_s=tf.scalar_summary("max_score",max_score)
             mi_s=tf.scalar_summary("min_score",min_score)
             merge = tf.merge_summary([al, mal, mil, a_s, ma_s, mi_s])
-            #else:
-                    #accuracy_av = tf.placeholder(tf.float32)
-                    #accuracy_max = tf.placeholder(tf.float32)
-                    #accuracy_min = tf.placeholder(tf.float32)
-                    #loss_av = tf.placeholder(tf.float32)
-                    #acc_sum = tf.scalar_summary("accuracy_av", accuracy_av)
-                    #acc_max_sum = tf.scalar_summary("accuracy_max", accuracy_max)
-                    #acc_min_sum = tf.scalar_summary("accuracy_min", accuracy_min)
-                    #l_sum = tf.scalar_summary("loss", loss_av)
-                    #merge = tf.merge_summary([acc_sum, acc_max_sum,acc_min_sum, l_sum])
             
             #Train while model gets better with upperbound max_max_epoch as number of runs
             for current_epoch in range(FLAGS.max_max_epoch):
@@ -581,11 +570,11 @@ def main(_):
                         f.close()
                     
                 sys.stdout.flush()
-                #save session every 100Es 
+                #save session every 5Es 
                 #if (current_epoch%5) == 0 or (current_epoch==FLAGS.max_max_epoch-1) or (current_epoch == 2):
                 if current_epoch==FLAGS.max_max_epoch-1:
                     if os.path.isfile(logfolder+"/model.ckpt"):
-                        os.remove(logfolder+"/model.ckpt")
+                        shutil.move(logfolder+"/model.ckpt", logfolder+"/model_"+str(current_epoch+windex*FLAGS.max_max_epoch)+".ckpt")
                     # Save the variables to disk.
                     save_path = saver.save(session, logfolder+"/model.ckpt")
                     print("Model %d saved in file: %s" %( current_epoch+windex*FLAGS.max_max_epoch, save_path ))

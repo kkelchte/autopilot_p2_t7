@@ -26,7 +26,10 @@ tf.app.flags.DEFINE_string(
     "app or flow or or depth_estimate or both.")
 tf.app.flags.DEFINE_string(
     "dataset", "generated",
-    "pick the dataset in /esat/qayd/kkelchte/simulation from which your movies can be found. Options: data or generated.")
+    "pick the dataset in data_root from which your movies can be found.")
+tf.app.flags.DEFINE_string(
+    "data_root", "/esat/emerald/tmp/remote_images",
+    "Define the root folder of the different datasets.")
 tf.app.flags.DEFINE_integer(
     "sample", "1",
     "Choose the amount the movies are subsampled. 16 is necessary to fit on a 2Gb GPU for both pcnn features.")
@@ -57,6 +60,7 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_boolean(
     "sliding_window", False,
     "Choose whether windows are picked randomly or are sliding over.")
+
 
 class DataError(Exception):
     def __init__(self, value):
@@ -183,7 +187,7 @@ def prepare_data(data_objects):
         FLAGS
             sample_step: the amount the movies are subsampled
             feature_type: app ~ appearance, flow ~ optical flow
-            dataset: the directory in the 'qayd/kkelchte/simulation/' path where the objects are found
+            dataset: the directory in the data_root path where the objects are found
             normalized: boolean defining whether or not the data should be normalized (no clear improvements on this one so far)
             network: the features comming from the Pose-CNN network 'pcnn' or from the Inception network 'inception'
     """
@@ -199,7 +203,7 @@ def prepare_data(data_objects):
         feature_types = [FLAGS.feature_type]
     # loop over trajectories
     for data_object in data_objects:
-        #directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'+data_object
+        #directory = FLAGS.data_root+FLAGS.dataset+'/'+data_object
         object_name = os.path.basename(data_object)
         #real labels from file or from RGB-directory
         if FLAGS.read_from_file:
@@ -424,7 +428,7 @@ def prepare_data_general(data_objects):
 def get_objects():
     # given a dataset read out the train, validate and test_set.txt lists
     # return 3 lists of objects
-    directory = '/esat/qayd/kkelchte/simulation/'+FLAGS.dataset+'/'
+    directory =os.path.join(FLAGS.data_root,FLAGS.dataset)
     print 'directory ', directory
     # read training objects from train_set.txt
     training_objects = get_list(directory,'train_set.txt')
