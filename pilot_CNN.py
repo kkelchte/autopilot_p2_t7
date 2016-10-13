@@ -20,7 +20,7 @@ from os.path import isdir, join, isfile
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string(
-    'model_dir', '/users/visics/kkelchte/tensorflow/examples/tutorial_imageclassification/inception/',
+    'model_file', '/users/visics/kkelchte/tensorflow/examples/tutorial_imageclassification/inception/classify_image_graph_def.pb',
     """Path to classify_image_graph_def.pb, """
     """imagenet_synset_to_human_label_map.txt, and """
     """imagenet_2012_challenge_label_map_proto.pbtxt.""")
@@ -90,8 +90,7 @@ def create_graph():
     """Creates a graph from saved GraphDef file and returns a saver."""
     # Creates graph from saved graph_def.pb.
     
-    with tf.gfile.FastGFile(os.path.join(
-        FLAGS.model_dir, 'classify_image_graph_def.pb'), 'rb') as f:
+    with tf.gfile.FastGFile(FLAGS.model_file, 'rb') as f:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
         _ = tf.import_graph_def(graph_def, name='')
@@ -151,7 +150,9 @@ def extract_offline():
                 image_data = tf.gfile.FastGFile(rgbfile, 'rb').read()
                 features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                 features = np.squeeze(features)
+                #print 'output: ', features
                 movie_features_app.append(features)
+            #import pdb; pdb.set_trace()
             movie_features_app = np.concatenate([movie_features_app])
             d = {'features': movie_features_app, 'object': m}
             sio.savemat(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)

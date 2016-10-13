@@ -115,7 +115,7 @@ class SmallConfig(Configuration):
     
     def __init__(self):
         FLAGS.max_num_windows = 1000 
-        FLAGS.sample = 10
+        FLAGS.sample = 1
         FLAGS.num_layers = 1
         FLAGS.hidden_size = 10 #dimensionality of cell state and output
         FLAGS.max_epoch = 5
@@ -164,7 +164,7 @@ class IncFCConfig(Configuration):
         
     def __init__(self):
         FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
-        FLAGS.max_max_epoch = 100
+        FLAGS.max_max_epoch = 150
         FLAGS.batch_size_fnn = 100
         FLAGS.fc_only = True
         FLAGS.hidden_size = 400
@@ -178,29 +178,38 @@ class IncLSTMConfig(Configuration):
     test_objects = ['sequential_oa_0008_0_1']
         
     def __init__(self):
-        FLAGS.max_epoch = 15
-        FLAGS.max_max_epoch = 30
-        FLAGS.max_num_threads = 40 #for 4G gpu should be ok?
-        FLAGS.dataset='inc_lstm_dagger'
+        FLAGS.max_epoch = 30 #15
+        FLAGS.max_max_epoch = 60 #30
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?        
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()       
 
-class DaggerConfig(Configuration):
-    """dagger config points to the huge dataset"""
-    training_objects = ['0000']
-    validate_objects = ['0001']
-    test_objects = ['0002']
+class OneIncLSTMConfig(Configuration):
+    """Inc LSTM layers trained on one room OA dataset"""
+    training_objects = ['one_oa_0000']
+    validate_objects = ['one_oa_0130']
+    test_objects = ['one_oa_0140']
         
     def __init__(self):
         FLAGS.max_epoch = 15
         FLAGS.max_max_epoch = 30
-        #FLAGS.window_size = 300
-        FLAGS.fnn_batch_size = 1 
-        if FLAGS.fc_only:
-            FLAGS.hidden_size = 400
-            FLAGS.max_epoch = 50
-            FLAGS.max_max_epoch = 100
-        FLAGS.dataset='dagger_total'
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok? 
+        FLAGS.dataset='one_oa'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()    
+
+class OneIncFCConfig(Configuration):
+    """Inc LSTM layers trained on one room OA dataset"""
+    training_objects = ['one_oa_0000']
+    validate_objects = ['one_oa_0130']
+    test_objects = ['one_oa_0140']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100 
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        FLAGS.dataset='one_oa'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects() 
 
 class CombConfig(Configuration):
     """comb config points to the huge dataset and goes over it with different window sizes"""
@@ -376,8 +385,6 @@ def get_config():
         config = WallConfig()
     elif FLAGS.model == "winwall":
         config = WallWindowConfig()
-    elif FLAGS.model == "dagger":
-        config = DaggerConfig()
     elif FLAGS.model == "depth_fc":
         config = DepthFCConfig()
     elif FLAGS.model == "depth_lstm":
@@ -386,6 +393,10 @@ def get_config():
         config = IncFCConfig()
     elif FLAGS.model == "inc_lstm":
         config = IncLSTMConfig()
+    elif FLAGS.model == "one_inc_lstm":
+        config = OneIncLSTMConfig()
+    elif FLAGS.model == "one_inc_fc":
+        config = OneIncFCConfig()
     else:
         config = Configuration()
     # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN

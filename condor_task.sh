@@ -2,33 +2,68 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-#TASK='pilot_CNN.py --chosen_set seq_oa_inc_fc' 	#wall_test
-#description="seq_oa_inc_fc_cnn_feats"
+# TASK='pilot_CNN.py --chosen_set one_oa' 	#wall_test
+# description="_one_oa_cnn_feats"
+
+TASK='pilot_train.py' 	#name of task in matlab to run
+#_______________________________________________________
+### FC
+####   inc_fc_dagger
+# model='inc_fc'
+# log_tag='seq_d6' 
+# fine='True'
+# mod_dir='inc_fc_seq_d5_fi_hsz_400_fc'
 
 #_______________________________________________________
-TASK='pilot_train.py' 	#name of task in matlab to run
+### LSTM (trained on better machines)
+andromeda='yes'
 
+#### inc_lstm_dagger
+model='inc_lstm'
+log_tag='seq_d6'
+fine='True'
+mod_dir='inc_lstm_seq_d5_fi'
+dataset='inc_lstm_dagger'
+
+#### inc_lstm_dagger_nof
+# model='inc_lstm'
+# log_tag='nof_d4'
+# dataset='inc_lstm_nof_dagger'
+
+#### inc_lstm_dagger_one
+# model='inc_lstm'
+# log_tag='f1_d1_straight'
+# fine='True'
+# mod_dir='inc_lstm_seq_d1_lr_0-05_fi'
+# dataset='inc_lstm_f1_dagger'
+
+#_______________________________________________________
+### ONE OA 
+
+### LSTM
+#andromeda='yes'
+#model='one_inc_lstm'
+#log_tag='rec' 
+
+### FC
+#model='one_inc_fc'
+#log_tag='rec'
+
+### n-FC
+#model='one_inc_fc'
+#log_tag='rec5'
+#stpfc=5
+
+
+
+
+#_______________________________________________________
 ####   depth_fc_dagger
 #model='depth_fc'
 #log_tag='seq' #d1
 #fine='True'
 #mod_dir='depth_fc_d1_fi_hsz_400_net_stijn_depth_fc'
 
-####   inc_fc_dagger
-model='inc_fc'
-log_tag='seq_d3' 
-fine='True'
-mod_dir='inc_fc_seq_d2_fi_hsz_400_fc'
-
-#_______________________________________________________
-#best to ask for 12G GPU
-
-# # # inc_lstm_dagger
-# andromeda='yes'
-# model='inc_lstm'
-# log_tag='seq_d1'
-# fine='True'
-# mod_dir='inc_lstm_seq'
 
 # depth_lstm_dagger
 #model='depth_lstm'
@@ -41,64 +76,10 @@ mod_dir='inc_fc_seq_d2_fi_hsz_400_fc'
 #model='comb'
 #log_tag='corridor'
 
-
-#Wall challenge !!! Dont forget to preprocess!!!
-#model='cwall' #"$1"
-#log_tag="d1" #tell python this is not a test so it is not including the testing tag
-#wsize="300"
-#bsize="2"
-#fine='True'
-#mod_dir='cwall_batchwise'
-
-#Wall challenge for different windowsizes and according batchsizes
-# model='winwall' #"$1"
-# wsize="$1"
-# bsize="$2"
-# log_tag="$3" #tell python this is not a test so it is not including the testing tag
-
-### SELECTED SEQUENTIAL TEST
-#model='seldat' #'cwall' #"$1"
-#log_tag="selected_30E" #tell python this is not a test so it is not including the testing tag
-#feature_type='depth_estimate' #"$5"
-#network='stijn' #"$6"
-#fc='True'
-#hidden_size='400'
-#bsize='500'
-
-# RANDOM OA TEST
-#model='dagger' #'cwall' #"$1"
-#log_tag="big" #tell python this is not a test so it is not including the testing tag
-#fc='True'
-#bsize='500'
-#hidden_size='400'
-#feature_type='depth_estimate' #"$5"
-#network='stijn' #"$6"
-
-
-#OA Stijns depth
-#model='dagger' #'cwall' #"$1"
-#log_tag="big" #tell python this is not a test so it is not including the testing tag
-#feature_type='depth_estimate' #"$5"
-#network='stijn' #"$6"
-
-### 2 OA FC
-#model='dagger'
-#log_tag='no_test'
-
-#fine='True'
-#mod_dir='dagger_hsz_400_fc'
-
-#Expert session
-#model='expert'
-#log_tag='_2'
-#feature_type='depth_estimate' #"$5"
-#network='stijn' #"$6"
-
-
 #hidden_size='400' #"$2"
 #batchwise="$2"
 #fc='True' #"$3"
-#stpfc="$4"
+
 #feature_type="$5"
 #network="$6"
 #sample="$9"
@@ -109,7 +90,7 @@ mod_dir='inc_fc_seq_d2_fi_hsz_400_fc'
 #optimizer="$4"
 #normalized="$5"
 #random_order="$2"
-
+#dataset=""
 
 condor_output_dir='/esat/qayd/kkelchte/tensorflow/condor_output'
 #------------------------------------
@@ -185,6 +166,10 @@ fi
 if [ ! -z $random_order ]; then 
 	TASK="$TASK --random_order ${random_order}"
 	description="${description}_rand_$random_order"
+fi
+if [ ! -z $dataset ]; then 
+	TASK="$TASK --dataset ${dataset}"
+	#description="${description}_rand_$random_order"
 fi
 echo $TASK
 # Delete previous log files if they are there

@@ -460,7 +460,6 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
         windowsizes: a list with the windowsizes needed corresponding to the list of unrolled networks to be trained
         batchsizes: a list of batchsizes for each window set according to the scale factor depending on the size of your RAM and GPU mem
     Return:
-        windowed_data: a nested list of lists of tuples with each tuple the according windowsize and batchsize as set by the arguments. [DEPRECATED]
         indices: a nested list of lists of tuples with each tuple the according indices for chosen group, chosen batch, chosen timestep. 
         			The data is picked randomly from the data list. The outer list corresponds to the number of windowsizes/models.
         			The innerlist is the amount of times a window batch is picked in order to correspond to 1 epoch. This depends of the amount of data.
@@ -568,8 +567,8 @@ def copy_windows_from_data(data_list, window_size, indices):
             data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
             labels[i] = data_list[tup_ind][1][mov_ind][start_ind:start_ind+window_size][:]
         except ValueError:
-            print 'data: ', str(data[i].shape) ,' doesnt fit with original data: ', str(data_list[0][0][mov_ind][start_ind:start_ind+window_size][:].shape)
-            print 'tup ', tup_ind,' mov ',mov_ind,' start ',start_ind,' windowsize: ',window_size,' data length ', str(data_list[0][0][mov_ind].shape)
+            print '[pilot_data]data: ', str(data[i].shape) ,' doesnt fit with original data: ', str(data_list[0][0][mov_ind][start_ind:start_ind+window_size][:].shape)
+            print '[pilot_data] tup ', tup_ind,' mov ',mov_ind,' start ',start_ind,' windowsize: ',window_size,' data length ', str(data_list[0][0][mov_ind].shape)
             return None, None
     return data, labels
 #####################################################################
@@ -594,19 +593,26 @@ if __name__ == '__main__':
     #print result_data
     #mylist=prepare_data_grouped(data_objects, feature_type='app', sample_step=8)
     #print type(mylist)
-    FLAGS.dataset='../../../emerald/tmp/remote_images/tiny_set'
-    #FLAGS.dataset='generated'
+    FLAGS.dataset='tiny_set'
+    FLAGS.fc_only=True
+    training_objects = ['0000','0010','0035','0025']
+    validate_objects = ['0000']
+    test_objects = ['0000']
+    training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in training_objects]
+    validate_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in validate_objects]
+    test_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in test_objects]
+    
     FLAGS.sample = 1
-    #training_objects, validate_objects, test_objects = get_objects()
-    #testset = prepare_data_list(test_objects)
-    #validationset = prepare_data_list(validate_objects)
-    #trainingset = prepare_data_grouped(training_objects)
-    trainingset = prepare_data_list(['0000', '0010'])
+    trainingset = prepare_data_list(training_objects)
     
-    window_sizes=[40]
-    batch_sizes=[6]
+    window_sizes=[1]
+    batch_sizes=[5]
     
-    indices = pick_sliding_windows(trainingset, window_sizes, batch_sizes)
+    window_indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
+    data, targets = copy_windows_from_data(trainingset, 4, window_indices[0][0])
+    print 'windowindices: ',len(window_indices),'',len(window_indices[0]),' ',window_indices[0][0].shape
+    print 'data: ',data.shape
+    
     import pdb; pdb.set_trace()
     #print type(trainingset)
     

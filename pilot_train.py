@@ -91,12 +91,12 @@ def run_batch_fc(session, model, data, targets, eval_op, writer=None, verbose=Fa
     #print "train FNN... datashape: ", data.shape, "targets shape: ", targets.shape
     start_time = time.time()
     batch_lengths = []
-    feed_dict = {model.inputs: data[:,0:1,:], model.targets: targets[:,0:1,:]}
+    feed_dict = {model.inputs: data[:,0:1,:], model.targets: targets[:,-1:,:]}
     
     # call the network: forward and backward pass
     outputs, costs, _ = session.run([model.logits, model.cost, eval_op],feed_dict)
     
-    trgts = targets.reshape((outputs.shape[0],outputs.shape[1]))
+    trgts = targets[:,-1,:].reshape((outputs.shape[0],outputs.shape[1]))
     total = data.shape[0]
     
     if FLAGS.continuous:
@@ -106,7 +106,10 @@ def run_batch_fc(session, model, data, targets, eval_op, writer=None, verbose=Fa
         #score_mse = sum([metrics.mean_squared_error(trgts[i,:], outputs[i,:]) for i in range(outputs.shape[0])])
         #score_mdae = sum([metrics.median_absolute_error(trgts[i,:], outputs[i,:]) for i in range(outputs.shape[0])])
         #print 'mae: ',score_mae,'. mse: ',score_mse,'. mdae: ',score_mdae
-        score = metrics.mean_squared_error(trgts, outputs)*total
+        try:
+            score = metrics.mean_squared_error(trgts, outputs)*total
+        except ValueError as e:
+            print "Could not calculate score due to NaN in trgts."+e[2]
         #print 'score ',score
     else:
         score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
@@ -148,7 +151,10 @@ def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=Non
     if FLAGS.continuous:
         # get the sum of the 2 norm difference between the targets and the outputs over the different batches and timesteps
         #score = [sum([sum((outputs[i,:]-trgts[i,:])**2) for i in range(outputs.shape[0])])]
-        score = metrics.mean_squared_error(trgts, outputs)*total
+        try:
+            score = metrics.mean_squared_error(trgts, outputs)*total
+        except ValueError as e:
+            print "Could not calculate score due to NaN in trgts."+e[2]
     else:
         score = float(sum((np.argmax(trgts, axis=1)==np.argmax(outputs, axis=1))))
     # Keep track of cell states
@@ -217,6 +223,7 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
             window_indices = pilot_data.pick_sliding_windows(data_list, window_sizes, batch_sizes)
         else:
             window_indices = pilot_data.pick_random_windows(data_list, window_sizes, batch_sizes)
+            if FLAGS.fc_only and FLAGS.step_size_fnn > 1:window_indices = pilot_data.pick_random_windows(data_list, [FLAGS.step_size_fnn], batch_sizes)
         print 'finished picking window indices'
         #import pdb; pdb.set_trace()
         # get the initial innerstate of the models according to the windows
@@ -266,10 +273,13 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
                 #import pdb; pdb.set_trace()
                 #loop over the index-tuples that relate to the model_index-th model
                 for inner_list_index in range(len(window_indices[model_index])):
-                    data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[model_index], window_indices[model_index][inner_list_index])
                     if FLAGS.fc_only: #in case of fully connected only
+                        #concatenate features in data according to step_size_fnn
+                        data, targets = pilot_data.copy_windows_from_data(data_list,FLAGS.step_size_fnn, window_indices[model_index][inner_list_index])
+                        data = np.array([[np.concatenate(data[i])] for i in range(data.shape[0])])
                         results = run_batch_fc(session, mtrain, data, targets, mtrain.train_op, writer=writer)
                     else: #normal LSTM
+                        data, targets = pilot_data.copy_windows_from_data(data_list, window_sizes[model_index], window_indices[model_index][inner_list_index])
                         initial_state = all_initial_states[model_index][inner_list_index]
                         results = run_batch_unrolled(session, 
                                    mtrain, 

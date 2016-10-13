@@ -63,6 +63,7 @@ frame = 0
 local_state = None
 mtest = None
 delay=0
+feature_queue = []
 
 def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, verbose=False, number_of_samples=500, matfile = ""):
     """Unroll the model 1 step and evaluate the batches of data 1step at the time and 1 batch at the time.
@@ -329,6 +330,7 @@ def evaluate_online(logfolder, config, scope="model"):
     global mtest
     global delay
     global session
+    global feature_queue
     if FLAGS.ssh:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
         #des_dir = '/esat/'+FLAGS.machine+'/tmp/control_output/'
@@ -352,6 +354,9 @@ def evaluate_online(logfolder, config, scope="model"):
             config.feature_dimension = 4070 
         else:
             config.feature_dimension = 2048
+        if FLAGS.step_size_fnn > 1:
+            print 'adjust feature feature_dimension'
+            config.feature_dimension=FLAGS.step_size_fnn*config.feature_dimension
         device_name='/gpu:0'
         with tf.variable_scope(scope), tf.device(device_name):
             mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
@@ -367,6 +372,7 @@ def evaluate_online(logfolder, config, scope="model"):
         #get the shape of the inner state of the model
         if not FLAGS.fc_only:
             local_state = session.run(mtest.initial_state)
+        
         #initial_state = np.zeros(prestate.shape)
         #assign zeros to the initial state of the model
         #session.run(tf.assign(mtest.initial_state, initial_state))
@@ -379,7 +385,6 @@ def evaluate_online(logfolder, config, scope="model"):
         eh = MyEventHandler()
         # notifier working in the same thread
         notifier = pyinotify.Notifier(wm, eh, timeout=10)
-        
         def on_loop(notifier):
             global current_feature
             global last_feature
@@ -389,6 +394,7 @@ def evaluate_online(logfolder, config, scope="model"):
             global delay
             global session
             global g
+            global feature_queue
             #import pdb; pdb.set_trace()
             if current_feature == last_feature:
                 pass
@@ -444,6 +450,7 @@ def evaluate_online(logfolder, config, scope="model"):
                         raise Exception('cleared inner state')
                     if current_feature == source_dir+'clear_memory' and FLAGS.fc_only:
                         last_feature='%s' % current_feature
+                        feature_queue=[]
                         raise Exception('trajectory finished')
                     data=sio.loadmat(current_feature)
                     if FLAGS.network == "inception":
@@ -452,9 +459,17 @@ def evaluate_online(logfolder, config, scope="model"):
                         data=data['gazebo_sim_dataset']
                         feature=data[0,0]['labels']
                         feature = np.reshape(feature,(1,1,4070))
-                    #import pdb;pdb.set_trace()
-                    #plt.matshow(np.transpose(np.reshape(feature, (74,55))))
-                    #plt.show()
+                    #if we have n-steps FC 
+                    if FLAGS.step_size_fnn > 1:
+                        #print 'append to feature queue'
+                        feature_queue.append(feature)
+                        if (len(feature_queue) < FLAGS.step_size_fnn):
+                            print 'skip calculation because length is too small: ', len(feature_queue)
+                            return;
+                        else:
+                            #print 'concat feature queue to feature'
+                            feature = np.array([[np.concatenate(np.squeeze(feature_queue))]])
+                    #import pdb; pdb.set_trace()
                     # Define evaluate 1step unrolled
                     if FLAGS.fc_only:
                         feed_dict = {mtest.inputs: feature}
@@ -477,19 +492,19 @@ def evaluate_online(logfolder, config, scope="model"):
                         disc_factor=int((outputs.shape[1]+1)/2)
                         max_index = np.argmax(outputs)
                         #print 'argmax output: ', max_index,' disc_factor: ',disc_factor
-                        #import pdb; pdb.set_trace()
                         output_str=convert_control_output.translate_index(max_index, disc_factor)
-                    if FLAGS.fly_straight:
-                        output_str = "0.8 0 0 0 0 0"
+                    if FLAGS.step_size_fnn > 1:
+                        feature_queue = feature_queue[1:]
+                        #print 'remove first queue element: ', len(feature_queue)
+                    #if FLAGS.fly_straight: 
+                    #    output_str = "0.8 0 0 0 0 0"
                     print 'output: ', output_str
-                    #import pdb;pdb.set_trace()
-                    
                     # Write output to control_output directory
-                    #fid = open('/esat/qayd/kkelchte/tensorflow/control_output/'+str(frame)+'.txt', 'w')
-                    fid = open(des_dir+str(frame)+'.txt', 'w')
+                    fid = open(des_dir+'.tmp', 'w')
                     fid.write(output_str)
                     fid.close()
-                    if FLAGS.ssh: time.sleep(0.002) # some time for saving the file
+                    if FLAGS.ssh: time.sleep(0.001) # some time for saving the file
+                    os.rename(des_dir+'.tmp', des_dir+str(frame)+'.txt')
                     frame=frame+1
                     #print "delay due to this feature: ", time.time()-delay
                 except Exception as e:
@@ -572,25 +587,35 @@ def main(unused_argv=None):
     logfolder = pilot_settings.extract_logfolder()
     #print 'logfolder',logfolder
     config = pilot_settings.get_config()
-    
+    FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
+    if os.path.isfile(os.path.join(FLAGS.model_dir, 'configuration.xml')):
+        print 'parsing configuration file in ',FLAGS.model_dir
+        tree=ET.parse(os.path.join(FLAGS.model_dir, 'configuration.xml'))
+        root=tree.getroot()
+        flgs=root.find('flags')
+        for flg in flgs:
+            if flg.tag != 'model_dir' and flg.tag != 'model_name' and flg.tag != 'online':
+                value = ''
+                try:
+                    value = int(flg.text)
+                except ValueError:
+                    try:
+                        value = float(flg.text)
+                    except ValueError:
+                        if flg.text == 'False': value = False
+                        elif flg.text == 'True': value = True
+                        else :  value = flg.text
+                FLAGS.__dict__['__flags'][flg.tag] = value
+                #print flg.tag, ": ",value," of type ",type(value)
+    else:
+        if FLAGS.fc_only:
+            FLAGS.hidden_size = 400
+        if FLAGS.network == 'stijn':
+            FLAGS.remote_features = 'depth_estimate'
     if FLAGS.online:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
         empty_folder(source_dir)
         FLAGS.ssh = True
-        FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
-        if os.path.isfile(os.path.join(FLAGS.model_dir, 'configuration.xml')):
-            print 'parsing configuration file...'
-            tree=ET.parse(os.path.join(FLAGS.model_dir, 'configuration.xml'))
-            root=tree.getroot()
-            flgs=root.find('flags')
-            for flg in flgs:
-                FLAGS.__dict__['__flags'][flg.tag] = flg.text
-        #import pdb; pdb.set_trace()
-        else:
-            if FLAGS.fc_only:
-                FLAGS.hidden_size = 400
-            if FLAGS.network == 'stijn':
-                FLAGS.remote_features = 'depth_estimate'
         evaluate_online(logfolder, config)
     else:
         evaluate(logfolder, config)
