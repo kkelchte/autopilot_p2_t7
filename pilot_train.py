@@ -62,10 +62,6 @@ tf.app.flags.DEFINE_integer(
 	"window_size", 0,
 	"Define what windowsize is used according to the required memory span of the task.\
 	If kept to default value (0) than windowsizes and batchsizes are picked in order to fit on a 2G GPU.")
-tf.app.flags.DEFINE_float(
-    "scale", "4",
-    "NOTUSED In case of windowwize learning, the batchsizes can be scaled according to the size of RAM and GPU.\
-    For a 2Gb GPU and 16Gb Ram the scale should be around 4.")
 tf.app.flags.DEFINE_boolean(
     "finetune", False,
     "Define wheter there should be a model loaded from init_model_dir to finetune or you want to train from scratch."
@@ -443,8 +439,8 @@ def main(_):
             window_sizes = [FLAGS.window_size]
             batch_sizes = [FLAGS.batch_size_fnn]
         if FLAGS.model == "small":
-            window_sizes = [5,10] 
-            batch_sizes = [10, 5] 
+            window_sizes = [5] 
+            batch_sizes = [3] 
         if FLAGS.fc_only: #in case of training FNN no timesteps are needed
             window_sizes = [1]
             batch_sizes = [FLAGS.batch_size_fnn]

@@ -1,25 +1,32 @@
 #This code groups the functions for evaluating a model by unrolling it one step
 #and predicting.
 #
+
+import numpy as np
+import scipy.io as sio
+
 import pilot_model
 import pilot_data
 import pilot_settings
 import convert_control_output
 
 import time
-import tensorflow as tf
-import numpy as np
-import scipy.io as sio
 
 import sys
 import pyinotify
 
 import os, shutil, os.path
 import re
+import skimage
+import skimage.transform
+from skimage import io
  
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import copy
 from lxml import etree as ET
+
+import tensorflow as tf
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -64,6 +71,8 @@ local_state = None
 mtest = None
 delay=0
 feature_queue = []
+mean=0
+variance=1
 
 def run_one_step_unrolled(session, model, data, targets, eval_op, writer=None, verbose=False, number_of_samples=500, matfile = ""):
     """Unroll the model 1 step and evaluate the batches of data 1step at the time and 1 batch at the time.
@@ -321,8 +330,31 @@ def evaluate(logfolder, config, scope="model"):
             #print 'min accuracy: ',acc_min
             #print 'average perplexity: ',per
     print 'evaluation...finished!'
+    
+def load_image(path_to_image):
+    """Read in image from file and export as proper feature."""
+    scale=0.2
+    max_shape=int(360*640*3*scale*scale)
+    if not os.path.isfile(path_to_image):
+        raise IOError("path_to_image does not exist.")
+    success=False
+    while not success:
+        try:
+            #import pdb; pdb.set_trace()
+            im_array = io.imread(path_to_image)
+            im_array = skimage.transform.rescale(im_array, 0.2)
+            success = True
+        except:
+            print 'failed to load',path_to_image
+            time.sleep(0.005)
+    return np.reshape(im_array, [1,1,max_shape])
 
 def evaluate_online(logfolder, config, scope="model"):
+    """This function is called from the main thread and coordinates the one step evaluation.
+    Args:
+        logfolder: the log folder is extracted from all the different user configurations
+        config: the configurations are grouped in a configuration object    
+    """
     global current_feature
     global last_feature
     global frame
@@ -331,29 +363,40 @@ def evaluate_online(logfolder, config, scope="model"):
     global delay
     global session
     global feature_queue
-    if FLAGS.ssh:
+    global mean
+    global variance
+    
+    if FLAGS.network == 'no_cnn':
+        source_dir = '/esat/emerald/tmp/remote_images/set_online/RGB/'
+        des_dir = '/esat/emerald/tmp/control_output/'
+    elif FLAGS.ssh:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
-        #des_dir = '/esat/'+FLAGS.machine+'/tmp/control_output/'
         des_dir = '/esat/'+FLAGS.machine+'/tmp/control_output/'
     else:
         source_dir = '/esat/qayd/kkelchte/simulation/remote_features/'
         des_dir = '/esat/qayd/tmp/control_output/'
-    """This function is called from the main thread and coordinates the one step evaluation.
-    Args:
-        logfolder: the log folder is extracted from all the different user configurations
-        config: the configurations are grouped in a configuration object    
-    """
     # Restore a saved model fitting this configuration < model_dir
     g = tf.Graph()
     with g.as_default():
         if FLAGS.continuous:
-            config.output = 6 #9 #4 ### TODO make this dynamic from model or input flags?
+            if FLAGS.short_labels:
+                config.output = 2
+            else:
+                config.output = 6 #9 #4 ### TODO make this dynamic from model or input flags?
         else: #continuous case
             config.output = 41
         if FLAGS.network == 'stijn':
             config.feature_dimension = 4070 
-        else:
+        elif FLAGS.network == 'inception':
             config.feature_dimension = 2048
+        elif FLAGS.network == 'no_cnn':
+            config.feature_dimension = 360*640*3*0.2*0.2
+        if FLAGS.normalized:
+            #load normalization matrices:
+            data = sio.loadmat('mean_variance_'+FLAGS.feature_type+"_"+FLAGS.network+'.mat')
+            mean = data['mean']
+            variance = data['variance']
+            data = None
         if FLAGS.step_size_fnn > 1:
             print 'adjust feature feature_dimension'
             config.feature_dimension=FLAGS.step_size_fnn*config.feature_dimension
@@ -395,13 +438,15 @@ def evaluate_online(logfolder, config, scope="model"):
             global session
             global g
             global feature_queue
+            global mean
+            global variance
             #import pdb; pdb.set_trace()
             if current_feature == last_feature:
                 pass
                 #print 'wait'
                 #return
             else:
-                print 'run through new feature: ',current_feature
+                print 'run through new feature: ',os.path.basename(current_feature),' last: ',os.path.basename(last_feature)
                 try:
                     # data needs to be np array [batchsize 1, num_steps 1, feature_dimension]
                     if FLAGS.ssh: time.sleep(0.005) #wait till file is fully arrived on local harddrive when using ssh
@@ -452,13 +497,22 @@ def evaluate_online(logfolder, config, scope="model"):
                         last_feature='%s' % current_feature
                         feature_queue=[]
                         raise Exception('trajectory finished')
-                    data=sio.loadmat(current_feature)
                     if FLAGS.network == "inception":
+                        data=sio.loadmat(current_feature)
                         feature=data['features']
                     elif FLAGS.network == "stijn":
+                        data=sio.loadmat(current_feature)
                         data=data['gazebo_sim_dataset']
                         feature=data[0,0]['labels']
                         feature = np.reshape(feature,(1,1,4070))
+                    elif FLAGS.network == 'no_cnn':
+                        feature=load_image(current_feature)
+                    if FLAGS.normalized:
+                        #print 'normalize feature: ',feature
+                        epsilon = 0.001
+                        feature=(feature-mean[0])/(np.sqrt(variance[0])+epsilon)
+                        #print 'normalized feature: ',feature
+                        
                     #if we have n-steps FC 
                     if FLAGS.step_size_fnn > 1:
                         #print 'append to feature queue'
@@ -481,10 +535,16 @@ def evaluate_online(logfolder, config, scope="model"):
                     last_feature='%s' % current_feature # copy string object
                     #writer.add_summary(summary_str, f)
                     if FLAGS.continuous:
-                        output_str = str(outputs[0])[1:-1] #get the brackets off
-                        if FLAGS.fc_only:#Still needs to be tested!!
-                            output_str=re.sub('\n','',output_str)
-                            output_str=output_str[1:-1]
+                        if FLAGS.short_labels:
+                            #print 'prim output ',outputs[0]
+                            if FLAGS.fc_only: output_str="0.8 0 "+str(outputs[0][0][0])+" 0 0 "+str(outputs[0][0][1])
+                            else: output_str="0.8 0 "+str(outputs[0][0])+" 0 0 "+str(outputs[0][1])
+                            #print 'output: ',output_str
+                        else:
+                            output_str = str(outputs[0])[1:-1] #get the brackets off
+                            if FLAGS.fc_only:
+                                output_str=re.sub('\n','',output_str)
+                                output_str=output_str[2:-1]#get the brackets off
                     else:
                         #output_str = str(np.argmax(outputs))
                         if outputs.shape[1]%2 == 0:

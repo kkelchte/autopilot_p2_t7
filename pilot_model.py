@@ -33,6 +33,10 @@ tf.app.flags.DEFINE_integer(
     "step_size_fnn", 1,
     "set the amount frames are concatenated to form a feature of a frame."
     )
+tf.app.flags.DEFINE_boolean(
+    "conv_layers", False,
+    "Include convolutional layers before FC or LSTM.")
+
 
 class ModelError(Exception):
     def __init__(self, value):
@@ -42,11 +46,11 @@ class ModelError(Exception):
 
 class LSTMModel(object):
 
-    def __init__(self, is_training, output_size, feature_dimension, batch_size=1, num_steps=1, prefix=''):
+    def __init__(self, is_training, output_size, input_dimension, batch_size=1, num_steps=1, prefix=''):
         '''initialize the model
         Args:
             is_training = boolean that adds optimizer operation
-            output_size, feature_dimension, batch_size, num_steps = defines what kind of input the model can get_variable
+            output_size, input_dimension, batch_size, num_steps = defines what kind of input the model can get_variable
             prefix = train/validate/test
         '''
         self._is_training=is_training
@@ -65,14 +69,14 @@ class LSTMModel(object):
         self._num_layers = FLAGS.num_layers
         
         # Build LSTM graph
-        self._logits = self.inference(FLAGS.num_layers, FLAGS.hidden_size, output_size, feature_dimension, FLAGS.gpu, FLAGS.keep_prob)
+        self._logits = self.inference(FLAGS.num_layers, FLAGS.hidden_size, output_size, input_dimension, FLAGS.gpu, FLAGS.keep_prob)
         self._cost = self.loss(output_size, FLAGS.gpu)
         
         if self._is_training:
             self.training(FLAGS.gpu, optimizer_type=FLAGS.optimizer)
     
     
-    def inference(self, num_layers, hidden_size, output_size, feature_dimension, gpu, keep_prob=1.0):
+    def inference(self, num_layers, hidden_size, output_size, input_dimension, gpu, keep_prob=1.0):
         """Build the LSTM model up to where it may be used for inference.
 
         Args:
@@ -84,16 +88,80 @@ class LSTMModel(object):
         Returns:
             softmax_linear: Output tensor with the computed logits.
         """
-                
+        print "inference ",self.prefix,": batch ", self._batch_size," hiddensize ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
+        
+        feature_dimension=1024
+        
         device_name='/cpu:0'
         if gpu:
             device_name='/gpu:0'
         #print "device name: ", device_name
         # Placeholder for input 
         with tf.device(device_name):
-            self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, feature_dimension], name=self._prefix+"_input_ph")
+            self._inputs = tf.placeholder(tf.float32, [self._batch_size, self._num_steps, input_dimension], name=self._prefix+"_input_ph")
+        if not FLAGS.conv_layers:
+            self._feature_inputs=self.inputs
+            feature_dimension=input_dimension
+        else:
+            if input_dimension != 72*128*3:
+                raise ValueError("[pilot_model] input dimension to convolutional network is not 72*128*3: "+input_dimension)
+            # A few definitions in for readability
+            def weight_variable(shape):
+                initial = tf.truncated_normal(shape, stddev=0.1)
+                return tf.Variable(initial)
+            def bias_variable(shape):
+                initial = tf.constant(0.1, shape=shape)
+                return tf.Variable(initial)
+            # Basic padding so size stays the same
+            def conv2d(x, W):
+                return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+            # Basic 2x2 max pooling
+            def max_pool_2x2(x):
+                return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],strides=[1, 2, 2, 1], padding='SAME')
             
-        print "inference ",self.prefix,": batch ", self._batch_size," hiddensize ",hidden_size," keep_prob ",keep_prob," layers ",num_layers," ",num_layers
+            """Add convolutional layers in order to lower the high dimensional input. 
+            Extracting features before feeding them to the FC layers or the LSTM layer.
+            """
+            #x = tf.placeholder(tf.float32, shape=[None, 27648]) # Define shape of placeholder,
+            # First layer: calculate 12 features of each 5x5 patch
+            W_conv1 = weight_variable([5, 5, 3, 12]) # initialize the weights
+            b_conv1 = bias_variable([12])
+            #reshape image x to 4d tensor
+            x_image = tf.reshape(self._inputs, [-1,72,128,3])
+            #convolve 
+            h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
+            h_pool1 = max_pool_2x2(h_conv1)
+
+            # Second layer: calculate 24 features of each 5x5 patch
+            W_conv2 = weight_variable([5, 5, 12, 24]) # initialize the weights
+            b_conv2 = bias_variable([24])
+            #convolve 
+            h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+            h_pool2 = max_pool_2x2(h_conv2)
+
+            # Third layer: calculate 24 features of each 5x5 patch
+            W_conv3 = weight_variable([5, 5, 24, 48]) # initialize the weights
+            b_conv3 = bias_variable([48])
+            #convolve 
+            h_conv3 = tf.nn.relu(conv2d(h_pool2, W_conv3) + b_conv3)
+            h_pool3 = max_pool_2x2(h_conv3)
+
+            # Final layer: calculate 24 features of each 5x5 patch
+            W_conv4 = weight_variable([3, 3, 48, 64]) # initialize the weights
+            b_conv4 = bias_variable([64])
+            #convolve 
+            h_conv4 = tf.nn.relu(conv2d(h_pool3, W_conv4) + b_conv4)
+            h_pool4 = max_pool_2x2(h_conv4)
+
+            # Fully connected layers...
+            W_fc1 = weight_variable([5 * 8 * 64, feature_dimension])
+            b_fc1 = bias_variable([feature_dimension])
+            h_pool4_flat = tf.reshape(h_pool4, [-1, 5 * 8 * 64])
+            h_fc1 = tf.nn.relu(tf.matmul(h_pool4_flat, W_fc1) + b_fc1)
+            
+            # some deforming to ensure feature_input is in correct shape
+            self._feature_inputs=tf.reshape(h_fc1, [self._batch_size, self._num_steps, feature_dimension])
+        
         if not FLAGS.fc_only:
             with tf.variable_scope("LSTM"):
                 with tf.device(device_name):
@@ -117,8 +185,8 @@ class LSTMModel(object):
                     
                     #self._initial_state = tf.get_variable(self._prefix+"_initial_state",[self._batch_size,hidden_size*num_layers*2], trainable=False)
                     
-                    if self.is_training and keep_prob < 1:
-                        self._inputs = tf.nn.dropout(self.inputs, keep_prob)
+                    #if self.is_training and keep_prob < 1:
+                        #self._feature_inputs = tf.nn.dropout(self.inputs, keep_prob)
                     
                     #unfolled a greater network over num_steps timesteps concatenating the output
                     outputs = []
@@ -127,7 +195,7 @@ class LSTMModel(object):
                     for time_step in range(self._num_steps):
                         if time_step > 0: tf.get_variable_scope().reuse_variables()
                         if time_step == 1: self._state = state # the next run will need the state after the first step to continue
-                        (cell_output, state) = cell(self._inputs[:, time_step, :], state)
+                        (cell_output, state) = cell(self._feature_inputs[:, time_step, :], state)
                         # what is the size of this state? [batchsize * layers * hidden_size *2 (for output and cell state)]
                         outputs.append(cell_output)
                         states.append(state)
@@ -148,7 +216,7 @@ class LSTMModel(object):
                 with tf.device(device_name):
                     weights = tf.get_variable("weights", [feature_dimension, hidden_size])
                     biases = tf.get_variable('biases', [hidden_size])
-                    hidden1 = tf.nn.relu(tf.matmul(self._inputs[:,0,:], weights) + biases)
+                    hidden1 = tf.nn.relu(tf.matmul(self._feature_inputs[:,0,:], weights) + biases)
             with tf.variable_scope("hidden2"):
                 with tf.device(device_name):
                     weights = tf.get_variable("weights", [hidden_size, hidden_size])
@@ -298,7 +366,11 @@ class LSTMModel(object):
     @property
     def inputs(self):
         return self._inputs
-
+    
+    @property
+    def feature_inputs(self):
+        return self._feature_inputs
+    
     @property
     def targets(self):
         return self._targets

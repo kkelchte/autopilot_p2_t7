@@ -9,9 +9,14 @@ import scipy.io as sio
 import numpy as np
 import tensorflow as tf
 from os import listdir
-from os.path import isfile,join
+from os.path import isfile,join, isdir
 import time
 import random
+
+from PIL import Image
+import skimage
+import skimage.transform
+from skimage import io
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -43,7 +48,7 @@ tf.app.flags.DEFINE_string(
     "data_type", "listed",
     "Choose how the data need to be prepared: grouped means into batches of sequences of similar length. Batched means that it splits up the data over batches of 1000 frames. Otherwise it will take each movie as a separate batch and work with batch size of 1 [default].")
 tf.app.flags.DEFINE_integer(
-    "batch_length",1000,
+    "batch_length",100,
     "In case of batched data_type choose the length in which the sequences are sliced.")
 tf.app.flags.DEFINE_integer(
     "max_batch_size",100,
@@ -56,11 +61,13 @@ tf.app.flags.DEFINE_boolean(
     "Use only 2 labels, one for up/down, one for left/right.")
 tf.app.flags.DEFINE_integer(
     "max_num_windows",500,
-    "#define max number of initial_state calculations for one epoch.")
+    "Define max number of initial_state calculations for one epoch.")
 tf.app.flags.DEFINE_boolean(
     "sliding_window", False,
     "Choose whether windows are picked randomly or are sliding over.")
-
+tf.app.flags.DEFINE_float(
+    "scale", "0.2", 
+    "Define the rate at which the learning rate decays.")
 
 class DataError(Exception):
     def __init__(self, value):
@@ -74,7 +81,7 @@ def extract_features(filename, network='pcnn'):
         filename: the path pointing to a mat file keeping the features
         network: the type of features found in this file ==> need of different extraction
     Returns:
-        ndarray object containing features of each frame
+        2darray object containing features of each frame
     """
     #print 'Extracting '+str(filename)
     #print 'network: ', network
@@ -98,6 +105,36 @@ def extract_features(filename, network='pcnn'):
                 loggin.warning("dimensions mismatch with stijn features, should be 4070")
     return feats
    
+def load_images(directoryname, depth=False):
+    """Load the image in an 2d array [image 0, image 1, ... ]
+    Args:
+        directory name: path pointing to RGB dir with images
+    Returns:
+        2darray object containing oncatenated image for each frame
+    """
+    if not isdir(directoryname):
+        raise DataError("directory does not exist")
+    image_names = [ f for f in listdir(directoryname) if f[-3:]=='jpg' ]
+    scale=0.2
+    if FLAGS.scale and FLAGS.scale != 4: scale = FLAGS.scale
+    max_shape=int(360*640*3*scale*scale)
+    if depth: max_shape=int(360*640*scale*scale)
+    images = np.zeros([len(image_names),max_shape])
+    print 'shape of feature of: ',images.shape
+    c=0
+    for im_n in image_names:
+        #print 'im_n ',im_n
+        filename=join(directoryname, im_n)
+        im_array = io.imread(filename)
+        im_array = skimage.transform.rescale(im_array, scale)
+        #img=Image.fromarray(im_array)
+        #img.show()
+        #import pdb; pdb.set_trace()
+        ###normalize to floats between 0 and 1
+        images[c,:] = np.reshape(im_array, [1,max_shape])
+        c=c+1
+    return images
+    
 def get_labels_from_directory(directoryname):
     """This functions extract the ground truth from the images in the RGB directory defined by the directoryname
     and return an array with labels for each frame"""
@@ -225,9 +262,12 @@ def prepare_data(data_objects):
             elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy' or FLAGS.network == 'stijn': 
                 #feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
                 feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'_'+FLAGS.network+'.mat', FLAGS.network)
+            elif FLAGS.network == 'no_cnn':
+                feats = load_images(data_object+'/RGB')
+            elif FLAGS.network == 'no_cnn_depth':
+                feats = load_images(data_object+'/depth', True)
             else: raise DataError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
-        #import pdb; pdb.set_trace()
         #flow is on 2RBG images ==> skip first label to be equal
         if 'flow' in feature_types:
             labels_obj = labels_obj[1:]
@@ -432,8 +472,13 @@ def get_objects():
     print 'directory ', directory
     # read training objects from train_set.txt
     training_objects = get_list(directory,'train_set.txt')
+    
     # read validate objects from validat_set.txt
-    validate_objects = get_list(directory,'val_set.txt')
+    try: 
+        validate_objects = get_list(directory,'val_set.txt')
+    except IOError as e:
+        validat_objects = None
+        print 'val_set.txt does not exist.'
     # read test objects from test_set.txt
     test_objects = get_list(directory,'test_set.txt')
     return training_objects, validate_objects, test_objects
@@ -593,27 +638,32 @@ if __name__ == '__main__':
     #print result_data
     #mylist=prepare_data_grouped(data_objects, feature_type='app', sample_step=8)
     #print type(mylist)
-    FLAGS.dataset='tiny_set'
-    FLAGS.fc_only=True
-    training_objects = ['0000','0010','0035','0025']
-    validate_objects = ['0000']
-    test_objects = ['0000']
-    training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in training_objects]
-    validate_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in validate_objects]
-    test_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in test_objects]
+    #validate_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in validate_objects]
+    #test_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in test_objects]
     
-    FLAGS.sample = 1
+    FLAGS.dataset='sequential_oa_depth'
+    training_objects, validate_objects, test_objects = get_objects()
+    
+    #FLAGS.dataset='tiny_set'
+    #training_objects = ['0000']
+    #training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in training_objects]
+    
+    print training_objects
+    
+    FLAGS.network = 'no_cnn_depth'
+    FLAGS.scale = 0.1
+    
     trainingset = prepare_data_list(training_objects)
-    
-    window_sizes=[1]
-    batch_sizes=[5]
-    
-    window_indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
-    data, targets = copy_windows_from_data(trainingset, 4, window_indices[0][0])
-    print 'windowindices: ',len(window_indices),'',len(window_indices[0]),' ',window_indices[0][0].shape
-    print 'data: ',data.shape
-    
     import pdb; pdb.set_trace()
+    
+    #window_sizes=[1]
+    #batch_sizes=[5]
+    
+    #window_indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
+    #data, targets = copy_windows_from_data(trainingset, 4, window_indices[0][0])
+    #print 'windowindices: ',len(window_indices),'',len(window_indices[0]),' ',window_indices[0][0].shape
+    #print 'data: ',data.shape
+    
     #print type(trainingset)
     
     #training_data, training_labels = prepare_data(training_objects, sample_step=100, feature_type='both')

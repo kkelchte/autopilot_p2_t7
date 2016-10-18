@@ -143,40 +143,40 @@ def extract_offline():
                 os.chmod(directory, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
             movie_features_app = []
             rgb_images=[img for img in sorted(listdir(join(movies_dir,m,'RGB'))) if isfile(join(movies_dir,m,'RGB',img))]
-            for img in rgb_images:
-                #APP
-                rgbfile = join(movies_dir,m,'RGB',img)
-                #print 'img: ', img, ' of ', len(rgb_images)
-                image_data = tf.gfile.FastGFile(rgbfile, 'rb').read()
-                features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
-                features = np.squeeze(features)
-                #print 'output: ', features
-                movie_features_app.append(features)
-            #import pdb; pdb.set_trace()
-            movie_features_app = np.concatenate([movie_features_app])
-            d = {'features': movie_features_app, 'object': m}
-            sio.savemat(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
-
-            if isdir(join(movies_dir,m,'depth')):
-                movie_features_flow = []
-                #flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
-                flow_images=[img for img in sorted(listdir(join(movies_dir,m,'depth'))) if isfile(join(movies_dir,m,'depth',img))]
-                for img in flow_images:
-                    #FLOW
-                    flowfile = join(movies_dir,m,'depth',img)
-                    image_data = tf.gfile.FastGFile(flowfile, 'rb').read()
+            if not isfile(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat')):
+                for img in rgb_images:
+                    #APP
+                    rgbfile = join(movies_dir,m,'RGB',img)
+                    #print 'img: ', img, ' of ', len(rgb_images)
+                    image_data = tf.gfile.FastGFile(rgbfile, 'rb').read()
                     features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
                     features = np.squeeze(features)
-                    movie_features_flow.append(features)
-                movie_features_flow = np.concatenate([movie_features_flow])
+                    #print 'output: ', features
+                    movie_features_app.append(features)
                 #import pdb; pdb.set_trace()
-                d = {'features': movie_features_flow, 'object': m}
-                #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
-                sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+                movie_features_app = np.concatenate([movie_features_app])
+                d = {'features': movie_features_app, 'object': m}
+                sio.savemat(join(movies_dir,m,'cnn_features','app_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+            if not isfile(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat')):
+                if isdir(join(movies_dir,m,'depth')):
+                    movie_features_flow = []
+                    #flow_images=[img for img in sorted(listdir(join(movies_dir,m,'flow'))) if isfile(join(movies_dir,m,'flow',img))]
+                    flow_images=[img for img in sorted(listdir(join(movies_dir,m,'depth'))) if isfile(join(movies_dir,m,'depth',img))]
+                    for img in flow_images:
+                        #FLOW
+                        flowfile = join(movies_dir,m,'depth',img)
+                        image_data = tf.gfile.FastGFile(flowfile, 'rb').read()
+                        features = sess.run(feature_tensor,{'DecodeJpeg/contents:0': image_data})
+                        features = np.squeeze(features)
+                        movie_features_flow.append(features)
+                    movie_features_flow = np.concatenate([movie_features_flow])
+                    #import pdb; pdb.set_trace()
+                    d = {'features': movie_features_flow, 'object': m}
+                    #sio.savemat(join(movies_dir,m,'cnn_features','flow_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
+                    sio.savemat(join(movies_dir,m,'cnn_features','depth_'+m+'_'+FLAGS.network+'.mat'), d, appendmat=False)
             
             print 'Duration of last movie: ', print_time(starttime), '. Estimated time: ', print_duration(int((time.time()-starttime)*(len(movies)-i)))
         
-
 def extract_online():
     global frame
     global delay

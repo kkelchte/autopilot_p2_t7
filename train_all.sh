@@ -51,13 +51,9 @@
 
 ##STEP 1: choose learning rate
 ##              model learningrate
-#./condor_task.sh cont 0.000001
-#./condor_task.sh cont 0.00001
-#./condor_task.sh cont 0.0001
-#./condor_task.sh cont 0.001
-#./condor_task.sh cont 0.01
-#./condor_task.sh cont 0.1
-#./condor_task.sh cont 1
+./condor_task.sh 0.00001
+./condor_task.sh 0.001
+./condor_task.sh 0.1
 
 ##STEP 2: choose hidden size
 # ##              model hidden window batch

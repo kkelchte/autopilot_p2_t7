@@ -2,28 +2,83 @@
 # This scripts sets some parameters for running a tasks,
 # creates a condor and shell scripts and launches the stuff on condor.
 
-# TASK='pilot_CNN.py --chosen_set one_oa' 	#wall_test
-# description="_one_oa_cnn_feats"
+# TASK='pilot_CNN.py --chosen_set sequential_oa_rec' 	#wall_test
+# description="_sequential_oa_rec_cnn_feats"
+
+# TASK='pilot_data_prepare.py' 	#wall_test
+# description="_prepare_normalized_sequential_oa"
 
 TASK='pilot_train.py' 	#name of task in matlab to run
+
+
 #_______________________________________________________
+### ONE OA 
+
+### LSTM
+# andromeda='yes'
+# model='one_inc_lstm'
+# log_tag='rec_short'
+# short_lbls='True'
+
 ### FC
+# model='one_inc_fc'
+# log_tag='rec_short'
+# short_lbls='True'
+
+### n-FC
+#model='one_inc_fc'
+#log_tag='rec5'
+#stpfc=5
+
+#_______________________________________________________
+### Sequential OA with convolutional layers
+### LSTM
+# andromeda='yes'
+# model='seq_end_lstm'
+# log_tag='end'
+
+### FC ----> find learning rate
+# andromeda='yes'
+# model='seq_end_fc'
+# log_tag='end'
+# learning_rate="$1"
+
+#_______________________________________________________
+### Sequential OA with recovery cameras
+
 ####   inc_fc_dagger
 # model='inc_fc'
-# log_tag='seq_d6' 
-# fine='True'
-# mod_dir='inc_fc_seq_d5_fi_hsz_400_fc'
+# log_tag='seq_rec'
+
+
+# #### inc_lstm_dagger
+#andromeda='yes'
+#model='inc_lstm'
+#log_tag='seq_rec'
+
+#_______________________________________________________
+### Sequential OA on pure depth images
+
+####   depth_fc
+model='depth_fc'
+log_tag='seq'
+
+
+# #### depth_lstm
+#andromeda='yes'
+#model='depth_lstm'
+#log_tag='seq'
 
 #_______________________________________________________
 ### LSTM (trained on better machines)
-andromeda='yes'
-
-#### inc_lstm_dagger
-model='inc_lstm'
-log_tag='seq_d6'
-fine='True'
-mod_dir='inc_lstm_seq_d5_fi'
-dataset='inc_lstm_dagger'
+# andromeda='yes'
+# 
+# #### inc_lstm_dagger
+# model='inc_lstm'
+# log_tag='seq_d6'
+# fine='True'
+# mod_dir='inc_lstm_seq_d5_fi'
+# dataset='inc_lstm_dagger'
 
 #### inc_lstm_dagger_nof
 # model='inc_lstm'
@@ -36,26 +91,6 @@ dataset='inc_lstm_dagger'
 # fine='True'
 # mod_dir='inc_lstm_seq_d1_lr_0-05_fi'
 # dataset='inc_lstm_f1_dagger'
-
-#_______________________________________________________
-### ONE OA 
-
-### LSTM
-#andromeda='yes'
-#model='one_inc_lstm'
-#log_tag='rec' 
-
-### FC
-#model='one_inc_fc'
-#log_tag='rec'
-
-### n-FC
-#model='one_inc_fc'
-#log_tag='rec5'
-#stpfc=5
-
-
-
 
 #_______________________________________________________
 ####   depth_fc_dagger
@@ -85,7 +120,7 @@ dataset='inc_lstm_dagger'
 #sample="$9"
 #log_tag="${10}" #'no_test'
 #mod_dir="${11}" #model dir to finetune
-#learning_rate="$2"
+
 #keep_prob="$3"
 #optimizer="$4"
 #normalized="$5"
@@ -171,6 +206,11 @@ if [ ! -z $dataset ]; then
 	TASK="$TASK --dataset ${dataset}"
 	#description="${description}_rand_$random_order"
 fi
+if [ ! -z $short_lbls ]; then 
+	TASK="$TASK --short_labels ${short_lbls}"
+	#description="${description}_rand_$random_order"
+fi
+
 echo $TASK
 # Delete previous log files if they are there
 if [ -d $condor_output_dir ];then
@@ -244,7 +284,7 @@ echo "export PYTHONPATH=/users/visics/kkelchte/tensorflow/lib/python2.7/site-pac
 echo "cd /users/visics/kkelchte/tensorflow/examples/pilot">>$shell_file
 echo "echo 'went to directory ' $PWD">>$shell_file
 echo "python $TASK">>$shell_file
-echo "echo '$TASK has finished. \n \n description: $description.\n \n $condor_file' | mailx -s 'condor' klaas.kelchtermans@esat.kuleuven.be">>$shell_file
+echo "echo '$TASK has finished. \n \n description: $description. $condor_file' | mailx -s 'condor' klaas.kelchtermans@esat.kuleuven.be">>$shell_file
 
 chmod 755 $condor_file
 chmod 755 $shell_file

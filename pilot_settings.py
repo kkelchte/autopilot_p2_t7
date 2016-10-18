@@ -114,8 +114,8 @@ class SmallConfig(Configuration):
     test_objects = ['0000']
     
     def __init__(self):
-        FLAGS.max_num_windows = 1000 
-        FLAGS.sample = 1
+        FLAGS.max_num_windows = 10
+        FLAGS.sample = 5
         FLAGS.num_layers = 1
         FLAGS.hidden_size = 10 #dimensionality of cell state and output
         FLAGS.max_epoch = 5
@@ -125,35 +125,69 @@ class SmallConfig(Configuration):
         FLAGS.dataset='tiny_set'
         
 class DepthFCConfig(Configuration):
-    """depth fully connected layers trained on sequential OA dataset"""
-    training_objects = ['sequential_oa_0012_0.5_2']
-    validate_objects = ['sequential_oa_0004_0.5_1']
-    test_objects = ['sequential_oa_0008_0_1']
-        
+    """End-to-end training of convolutional layers with fully connected layers"""
+    training_objects = ['sequential_oa_depth_0000_0_1']
+    validate_objects = ['sequential_oa_depth_0000_0_1']
+    test_objects = ['sequential_oa_depth_0000_0_1']
+    
     def __init__(self):
-        FLAGS.max_epoch = 50
-        FLAGS.max_max_epoch = 100
-        FLAGS.batch_size_fnn = 100
-        FLAGS.fc_only = True
+	FLAGS.max_epoch = 100
+	FLAGS.max_max_epoch = 200
+	FLAGS.batch_size_fnn = 100
+	FLAGS.network = 'no_cnn_depth'
+	FLAGS.fc_only = True
         FLAGS.hidden_size = 400
-        FLAGS.network = 'stijn'
-        FLAGS.feature_type = 'depth_estimate'
-        FLAGS.dataset='sequential_oa'
+        FLAGS.dataset='sequential_oa_depth' #sequential_oa
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class DepthLSTMConfig(Configuration):
-    """depth LSTM layers trained on sequential OA dataset"""
+    """End-to-end training of convolutional layers with fully connected layers"""
+    training_objects = ['sequential_oa_depth_0000_0_1']
+    validate_objects = ['sequential_oa_depth_0000_0_1']
+    test_objects = ['sequential_oa_depth_0000_0_1']
+    
+    def __init__(self):
+	FLAGS.max_epoch = 100
+	FLAGS.max_max_epoch = 200
+	FLAGS.window_size = 20
+        FLAGS.batch_size_fnn = 32
+	FLAGS.network = 'no_cnn_depth'
+	FLAGS.dataset='sequential_oa_depth' #'sequential_oa'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+
+class EndFCConfig(Configuration):
+    """End-to-end training of convolutional layers with fully connected layers"""
     training_objects = ['sequential_oa_0012_0.5_2']
     validate_objects = ['sequential_oa_0004_0.5_1']
     test_objects = ['sequential_oa_0008_0_1']
-        
+    
     def __init__(self):
-        FLAGS.max_epoch = 15
-        FLAGS.max_max_epoch = 30
-        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
-        FLAGS.network = 'stijn'
-        FLAGS.feature_type = 'depth_estimate'
-        FLAGS.dataset='sequential_oa'
+	FLAGS.max_epoch = 100
+	FLAGS.max_max_epoch = 200
+	FLAGS.batch_size_fnn = 100
+	FLAGS.conv_layers = True
+	FLAGS.network = 'no_cnn'
+	FLAGS.normalized = True
+	FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        FLAGS.dataset='sequential_oa_rec' #sequential_oa
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class EndLSTMConfig(Configuration):
+    """End-to-end training of convolutional layers with fully connected layers"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+    
+    def __init__(self):
+	FLAGS.max_epoch = 100
+	FLAGS.max_max_epoch = 200
+	FLAGS.window_size = 20
+        FLAGS.batch_size_fnn = 32
+        FLAGS.conv_layers = True
+	FLAGS.network = 'no_cnn'
+	FLAGS.normalized = True
+	FLAGS.dataset='sequential_oa_rec' #'sequential_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class IncFCConfig(Configuration):
@@ -168,7 +202,7 @@ class IncFCConfig(Configuration):
         FLAGS.batch_size_fnn = 100
         FLAGS.fc_only = True
         FLAGS.hidden_size = 400
-        FLAGS.dataset='inc_fc_dagger'
+        FLAGS.dataset='sequential_oa_rec'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class IncLSTMConfig(Configuration):
@@ -180,7 +214,8 @@ class IncLSTMConfig(Configuration):
     def __init__(self):
         FLAGS.max_epoch = 30 #15
         FLAGS.max_max_epoch = 60 #30
-        FLAGS.max_num_threads = 20 #for 4G gpu should be ok?        
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok? 
+        FLAGS.dataset='sequential_oa_rec'      
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()       
 
 class OneIncLSTMConfig(Configuration):
@@ -288,7 +323,40 @@ class ExpertConfig(Configuration):
         FLAGS.max_num_threads = 5
         #FLAGS.sliding_window = True
         
-#### Old configurations        
+#### Old configurations
+
+#class DepthFCConfig(Configuration):
+    #"""depth fully connected layers trained on sequential OA dataset"""
+    #training_objects = ['sequential_oa_0012_0.5_2']
+    #validate_objects = ['sequential_oa_0004_0.5_1']
+    #test_objects = ['sequential_oa_0008_0_1']
+        
+    #def __init__(self):
+        #FLAGS.max_epoch = 50
+        #FLAGS.max_max_epoch = 100
+        #FLAGS.batch_size_fnn = 100
+        #FLAGS.fc_only = True
+        #FLAGS.hidden_size = 400
+        #FLAGS.network = 'stijn'
+        #FLAGS.feature_type = 'depth_estimate'
+        #FLAGS.dataset='sequential_oa'
+        #self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+#class DepthLSTMConfig(Configuration):
+    #"""depth LSTM layers trained on sequential OA dataset"""
+    #training_objects = ['sequential_oa_0012_0.5_2']
+    #validate_objects = ['sequential_oa_0004_0.5_1']
+    #test_objects = ['sequential_oa_0008_0_1']
+        
+    #def __init__(self):
+        #FLAGS.max_epoch = 15
+        #FLAGS.max_max_epoch = 30
+        #FLAGS.max_num_threads = 20 #for 4G gpu should be ok?
+        #FLAGS.network = 'stijn'
+        #FLAGS.feature_type = 'depth_estimate'
+        #FLAGS.dataset='sequential_oa'
+        #self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
 class DiscreteConfig(Configuration):
     """discrete labels for the OA challenge."""
     training_objects = ['0000'] #['set_7', 'set_7_1', 'set_7_2', 'set_7_3', 'set_7_4']
@@ -365,6 +433,7 @@ def get_config():
         config: configuration for training
     """
     # Get general configuration
+    
     if FLAGS.model == "big":
         config = BigConfig()
     elif FLAGS.model == "small":
@@ -397,6 +466,10 @@ def get_config():
         config = OneIncLSTMConfig()
     elif FLAGS.model == "one_inc_fc":
         config = OneIncFCConfig()
+    elif FLAGS.model == "seq_end_lstm":
+        config = EndLSTMConfig()
+    elif FLAGS.model == "seq_end_fc":
+        config = EndFCConfig()
     else:
         config = Configuration()
     # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN
