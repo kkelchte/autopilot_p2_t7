@@ -1,3 +1,11 @@
+./condor_task.sh seq_oa_hard_inc_fc_d3
+./condor_task.sh seq_oa_hard_inc_lstm_ww_d3
+
+# ./tmp_scripts/preprocess_dagger.sh seq_oa_hard_inc_fc_5_d3
+# ./tmp_scripts/preprocess_dagger.sh seq_oa_hard_inc_fc_d3
+# ./tmp_scripts/preprocess_dagger.sh seq_oa_hard_inc_lstm_sliding_d3
+# ./tmp_scripts/preprocess_dagger.sh seq_oa_hard_inc_lstm_ww_d3
+
 #Some general training/testing architecture
 
 #See if it is ok to delete the .tmp folder...
@@ -51,9 +59,9 @@
 
 ##STEP 1: choose learning rate
 ##              model learningrate
-./condor_task.sh 0.00001
-./condor_task.sh 0.001
-./condor_task.sh 0.1
+# ./condor_task.sh 0.00001
+# ./condor_task.sh 0.001
+# ./condor_task.sh 0.1
 
 ##STEP 2: choose hidden size
 # ##              model hidden window batch

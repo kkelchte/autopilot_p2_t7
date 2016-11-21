@@ -36,7 +36,9 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_boolean(
     "conv_layers", False,
     "Include convolutional layers before FC or LSTM.")
-
+tf.app.flags.DEFINE_float(
+    "max_grad_norm", "5",
+    "Clip the gradients to a maximum value.")
 
 class ModelError(Exception):
     def __init__(self, value):
@@ -54,7 +56,7 @@ class LSTMModel(object):
             prefix = train/validate/test
         '''
         self._is_training=is_training
-        
+        input_dimension=input_dimension*FLAGS.step_size_fnn
         # Define in what type input data arrives
         self._batch_size = batch_size
         if not FLAGS.fc_only:
@@ -103,7 +105,7 @@ class LSTMModel(object):
             self._feature_inputs=self.inputs
             feature_dimension=input_dimension
         else:
-            if input_dimension != 72*128*3:
+            if input_dimension != 72*128*3*FLAGS.step_size_fnn:
                 raise ValueError("[pilot_model] input dimension to convolutional network is not 72*128*3: "+input_dimension)
             # A few definitions in for readability
             def weight_variable(shape):
@@ -124,10 +126,10 @@ class LSTMModel(object):
             """
             #x = tf.placeholder(tf.float32, shape=[None, 27648]) # Define shape of placeholder,
             # First layer: calculate 12 features of each 5x5 patch
-            W_conv1 = weight_variable([5, 5, 3, 12]) # initialize the weights
+            W_conv1 = weight_variable([5, 5, 3*FLAGS.step_size_fnn, 12]) # initialize the weights
             b_conv1 = bias_variable([12])
             #reshape image x to 4d tensor
-            x_image = tf.reshape(self._inputs, [-1,72,128,3])
+            x_image = tf.reshape(self._inputs, [-1,72,128,3*FLAGS.step_size_fnn])
             #convolve 
             h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
             h_pool1 = max_pool_2x2(h_conv1)
@@ -139,14 +141,14 @@ class LSTMModel(object):
             h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
             h_pool2 = max_pool_2x2(h_conv2)
 
-            # Third layer: calculate 24 features of each 5x5 patch
+            # Third layer: calculate 48 features of each 5x5 patch
             W_conv3 = weight_variable([5, 5, 24, 48]) # initialize the weights
             b_conv3 = bias_variable([48])
             #convolve 
             h_conv3 = tf.nn.relu(conv2d(h_pool2, W_conv3) + b_conv3)
             h_pool3 = max_pool_2x2(h_conv3)
 
-            # Final layer: calculate 24 features of each 5x5 patch
+            # Final layer: calculate 64 features of each 3x3 patch
             W_conv4 = weight_variable([3, 3, 48, 64]) # initialize the weights
             b_conv4 = bias_variable([64])
             #convolve 
@@ -301,7 +303,7 @@ class LSTMModel(object):
         with tf.name_scope(self._prefix+'_training'):
             with tf.device(device_name):
                 tvars = tf.trainable_variables()
-                grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars), 5)# max_grad_norm = 5
+                grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars), FLAGS.max_grad_norm)# max_grad_norm = 5
                 # optimizer will apply calculated gradients at a certain training rate
                 if optimizer_type == 'RMSProp': 
                     optimizer = tf.train.RMSPropOptimizer(self._lr, decay=0.9, momentum=0.0, epsilon=1e-10, use_locking=False, name='RMSProp')

@@ -110,7 +110,7 @@ class Configuration:
 class SmallConfig(Configuration):
     """small config, for testing."""
     training_objects = ['0000','0010','0035','0025']
-    validate_objects = ['0000']
+    validate_objects = ['0000','0010']
     test_objects = ['0000']
     
     def __init__(self):
@@ -123,6 +123,101 @@ class SmallConfig(Configuration):
         #FLAGS.feature_type = 'depth_estimate' #'depth' #flow or app or both
         #FLAGS.network='stijn' #'inception'
         FLAGS.dataset='tiny_set'
+
+class SlidingConfig(Configuration):
+    """LSTM on inception features with sliding window"""
+    training_objects = ['sequential_oa_0000_0_1']
+    validate_objects = ['sequential_oa_0000_0_1']
+    test_objects = ['sequential_oa_0000_0_1']
+    
+    def __init__(self):
+        FLAGS.sliding_window = True
+	FLAGS.max_epoch = 50
+	FLAGS.max_max_epoch = 100
+        #FLAGS.dataset='sequential_oa'
+        FLAGS.data_type='grouped'
+        FLAGS.window_size=20
+        #FLAGS.batch_size_fnn = 32
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+
+class FullyUnrolledConfig(Configuration):
+    """LSTM on inception features with sliding window"""
+    training_objects = ['sequential_oa_0000_0_1']
+    validate_objects = ['sequential_oa_0000_0_1']
+    test_objects = ['sequential_oa_0000_0_1']
+    
+    def __init__(self):
+        FLAGS.max_epoch = 50
+	FLAGS.max_max_epoch = 100
+        FLAGS.dataset='sequential_oa'
+        FLAGS.data_type='grouped'
+        FLAGS.batchwise_learning=True
+        FLAGS.sample=5
+        FLAGS.preloading=False 
+        FLAGS.window_size=20
+        FLAGS.batch_size_fnn = 32
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+        
+class IncLSTMConfig(Configuration):
+    """depth LSTM layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50 #30 #15 #30 
+        FLAGS.max_max_epoch = 100 #60 #30 #60
+        FLAGS.max_num_threads = 20 #for 4G gpu should be ok? 
+        #FLAGS.dataset='inc_lstm_dagger' #'sequential_oa_rec'      
+        #FLAGS.window_size = 20
+        #FLAGS.batch_size_fnn = 32
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()     
+
+class IncFCConfig(Configuration):
+    """inception fully connected layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        #FLAGS.dataset='inc_fc_dagger' #'sequential_oa_rec'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+   
+class IncNFCConfig(Configuration):
+    """inception fully connected layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 100
+        FLAGS.step_size_fnn = 5
+        #FLAGS.dataset='inc_fc_dagger' #'sequential_oa_rec'
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
+
+class CutIncFCConfig(Configuration):
+    """inception fully connected layers trained on sequential OA dataset"""
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
+        
+    def __init__(self):
+        FLAGS.cut_end=20#100
+        FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
+        FLAGS.max_max_epoch = 100
+        FLAGS.batch_size_fnn = 100
+        FLAGS.fc_only = True
+        FLAGS.hidden_size = 400
+        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class DepthFCConfig(Configuration):
     """End-to-end training of convolutional layers with fully connected layers"""
@@ -162,15 +257,17 @@ class EndFCConfig(Configuration):
     test_objects = ['sequential_oa_0008_0_1']
     
     def __init__(self):
+        FLAGS.max_num_windows=1000
 	FLAGS.max_epoch = 100
 	FLAGS.max_max_epoch = 200
 	FLAGS.batch_size_fnn = 100
 	FLAGS.conv_layers = True
 	FLAGS.network = 'no_cnn'
-	FLAGS.normalized = True
+	FLAGS.preloading = False
+	#FLAGS.normalized = True
 	FLAGS.fc_only = True
         FLAGS.hidden_size = 400
-        FLAGS.dataset='sequential_oa_rec' #sequential_oa
+        FLAGS.dataset='seq_oa_huge' #'sequential_oa_rec' #sequential_oa
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
         
 class EndLSTMConfig(Configuration):
@@ -180,43 +277,19 @@ class EndLSTMConfig(Configuration):
     test_objects = ['sequential_oa_0008_0_1']
     
     def __init__(self):
-	FLAGS.max_epoch = 100
+	FLAGS.max_num_windows=500
+        FLAGS.max_epoch = 100
 	FLAGS.max_max_epoch = 200
 	FLAGS.window_size = 20
         FLAGS.batch_size_fnn = 32
+        FLAGS.preloading = False
         FLAGS.conv_layers = True
 	FLAGS.network = 'no_cnn'
-	FLAGS.normalized = True
-	FLAGS.dataset='sequential_oa_rec' #'sequential_oa'
+	#FLAGS.normalized = True
+	FLAGS.dataset='seq_oa_huge' #sequential_oa_rec #'sequential_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        
-class IncFCConfig(Configuration):
-    """inception fully connected layers trained on sequential OA dataset"""
-    training_objects = ['sequential_oa_0012_0.5_2']
-    validate_objects = ['sequential_oa_0004_0.5_1']
-    test_objects = ['sequential_oa_0008_0_1']
-        
-    def __init__(self):
-        FLAGS.max_epoch = 50 #leave 50 instead of 10 in order to make sure it convergers to a minimum
-        FLAGS.max_max_epoch = 150
-        FLAGS.batch_size_fnn = 100
-        FLAGS.fc_only = True
-        FLAGS.hidden_size = 400
-        FLAGS.dataset='sequential_oa_rec'
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()
-        
-class IncLSTMConfig(Configuration):
-    """depth LSTM layers trained on sequential OA dataset"""
-    training_objects = ['sequential_oa_0012_0.5_2']
-    validate_objects = ['sequential_oa_0004_0.5_1']
-    test_objects = ['sequential_oa_0008_0_1']
-        
-    def __init__(self):
-        FLAGS.max_epoch = 30 #15
-        FLAGS.max_max_epoch = 60 #30
-        FLAGS.max_num_threads = 20 #for 4G gpu should be ok? 
-        FLAGS.dataset='sequential_oa_rec'      
-        self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()       
+
+  
 
 class OneIncLSTMConfig(Configuration):
     """Inc LSTM layers trained on one room OA dataset"""
@@ -231,20 +304,25 @@ class OneIncLSTMConfig(Configuration):
         FLAGS.dataset='one_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects()    
 
-class OneIncFCConfig(Configuration):
+class ClipIncFCConfig(Configuration):
     """Inc LSTM layers trained on one room OA dataset"""
-    training_objects = ['one_oa_0000']
-    validate_objects = ['one_oa_0130']
-    test_objects = ['one_oa_0140']
+    training_objects = ['sequential_oa_0012_0.5_2']
+    validate_objects = ['sequential_oa_0004_0.5_1']
+    test_objects = ['sequential_oa_0008_0_1']
         
     def __init__(self):
+        FLAGS.max_grad_norm=1
+        #FLAGS.cut_end=100
         FLAGS.max_epoch = 50
         FLAGS.max_max_epoch = 100
         FLAGS.batch_size_fnn = 100 
         FLAGS.fc_only = True
         FLAGS.hidden_size = 400
-        FLAGS.dataset='one_oa'
+        #FLAGS.dataset='sequential_oa'
         self.training_objects, self.validate_objects, self.test_objects = pilot_data.get_objects() 
+
+
+        
 
 class CombConfig(Configuration):
     """comb config points to the huge dataset and goes over it with different window sizes"""
@@ -460,16 +538,24 @@ def get_config():
         config = DepthLSTMConfig()
     elif FLAGS.model == "inc_fc":
         config = IncFCConfig()
+    elif FLAGS.model == "inc_nfc":
+        config = IncNFCConfig()
     elif FLAGS.model == "inc_lstm":
         config = IncLSTMConfig()
     elif FLAGS.model == "one_inc_lstm":
         config = OneIncLSTMConfig()
-    elif FLAGS.model == "one_inc_fc":
-        config = OneIncFCConfig()
+    elif FLAGS.model == "clip_inc_fc":
+        config = ClipIncFCConfig()
+    elif FLAGS.model == "cut_inc_fc":
+        config = CutIncFCConfig()
     elif FLAGS.model == "seq_end_lstm":
         config = EndLSTMConfig()
     elif FLAGS.model == "seq_end_fc":
         config = EndFCConfig()
+    elif FLAGS.model == "sliding_lstm":
+        config = SlidingConfig()
+    elif FLAGS.model == "fully_unrolled_lstm":
+        config = FullyUnrolledConfig()
     else:
         config = Configuration()
     # Some FLAGS have priority on others in case of training the fully connected final layers for a FNN

@@ -4,10 +4,10 @@ Used by pilot_train.
 """
 import numpy.random as nr
 import numpy as np
-#import matplotlib
+import matplotlib
 # Force matplotlib to not use any Xwindows backend.
 # avoid images to appear...
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import scipy.io as sio

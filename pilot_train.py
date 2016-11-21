@@ -6,7 +6,7 @@ Uses pilot_data, pilot_eval, pilot_settings, pilot_model, pilot_states
 import pilot_data
 import pilot_model
 import pilot_settings
-import pilot_states
+#import pilot_states
 import pilot_eval
 
 import random
@@ -121,7 +121,7 @@ def run_batch_unrolled(session, model, data, targets, eval_op, state, writer=Non
         session: current session in which operations are defined
         model: model object that contains operations and represents network
         data: an np array containing 1 batch of data [batchsize, num_steps, feature_dimension]
-        targets: [batch, steps, 4]
+        targets: [batch, steps, output_dimension]
     """
     
     # run one time through the data given in a batch of all equal length.
@@ -221,15 +221,20 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
             window_indices = pilot_data.pick_random_windows(data_list, window_sizes, batch_sizes)
             if FLAGS.fc_only and FLAGS.step_size_fnn > 1:window_indices = pilot_data.pick_random_windows(data_list, [FLAGS.step_size_fnn], batch_sizes)
         print 'finished picking window indices'
-        #import pdb; pdb.set_trace()
+        print len(window_indices),' ', len(window_indices[0]),' ', window_indices[0][0].shape
+        
         # get the initial innerstate of the models according to the windows
         if not FLAGS.fc_only: 
             before_time = time.time()
-            #if the total number of initial state calculation is bigger than 200, do it multi threaded
-            if sum([len(window_indices[i])*window_indices[i][0].shape[0] for i in range(len(window_indices))]) > 20:
-                all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
-            else: #calculate initial states single threaded
-                all_initial_states = pilot_eval.get_initial_states_single(models, window_indices, mvalid, data_list, session)
+            if FLAGS.sliding_window:
+                all_initial_states = pilot_eval.get_initial_states_sliding(models, window_indices, mvalid, data_list, session)
+            else:
+                #if the total number of initial state calculation is bigger than 200, do it multi threaded
+                if sum([len(window_indices[i])*window_indices[i][0].shape[0] for i in range(len(window_indices))]) > 20:
+                    all_initial_states = pilot_eval.get_initial_states(models, window_indices, mvalid, data_list, session)
+                else: #calculate initial states single threaded
+                    all_initial_states = pilot_eval.get_initial_states_single(models, window_indices, mvalid, data_list, session)
+            print len(all_initial_states),' ',len(all_initial_states[0])
             #print 'old duration', print_time(after_time), ' from ',print_time(before_time)
             #import pdb; pdb.set_trace()
             #if np.amax(all_initial_states[0][0]-all_initial_states_old[0][0]) != 0:
@@ -250,8 +255,8 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
     #pick the models to train first from randomly
     if is_training and FLAGS.random_order: random.shuffle(model_indices)
     #import pdb; pdb.set_trace()
-    model_results = []
-    result_list=[]
+    result_list=[] #used to average results over different runs of one model
+    model_results = [] #used to list the results of different models
     for model_index in model_indices:
         if model_index == chosen_batch : writer = frame_writer
         else : writer = None
@@ -272,6 +277,7 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
                     if FLAGS.fc_only: #in case of fully connected only
                         #concatenate features in data according to step_size_fnn
                         data, targets = pilot_data.copy_windows_from_data(data_list,FLAGS.step_size_fnn, window_indices[model_index][inner_list_index])
+                        #concatenate n features over time.
                         data = np.array([[np.concatenate(data[i])] for i in range(data.shape[0])])
                         results = run_batch_fc(session, mtrain, data, targets, mtrain.train_op, writer=writer)
                     else: #normal LSTM
@@ -290,35 +296,63 @@ def run_epoch(is_training, session, models, data_list, config, location="", epoc
                 for r in range(len(result_list[0])):#average over batches that belong to this model
                     results.append(sum([res[r] for res in result_list])/len(result_list))
                 #print 'Average loss over window ',model_index,': ', results[1]
-                #import pdb;pdb.set_trace()
+                #
             else: #batchwise learning aka fully unrolled BPTT
-                data = data_list[model_index][0] #take data out of model_index-th batch-tuple (grouped)
-                targets = data_list[model_index][1] #take labels out of model_index-th batch-tuple (grouped)
-                # initialize network with 0 initial state
-                initial_state = session.run(mtrain.initial_state)
-                results = run_batch_unrolled(session, 
-                        mtrain, 
-                        data, #data 
-                        targets, #targets
-                        mtrain.train_op, #eval op
-                        initial_state,
-                        writer = writer, #frame writer
-                        verbose = False) #matfile=location+"/trainstates_"+str(i)+".mat")
-        # In case of validation...
+                
+                for loop_index in range(int(data_list[model_index][0].shape[0]/mtrain.batch_size)):
+                    print 'loop index: ',loop_index
+                    if not FLAGS.preloading:
+                        #batch needs to be concatenated in first dimension
+                        #batchsize=data_list[model_index][0].shape[0]
+                        batchsize=mtrain.batch_size
+                        indices = np.zeros([batchsize, 3], dtype=np.int)
+                        indices[:,0]=int(0) #assuming all the movies are grouped in the first tuple
+                        indices[:,1]=[int(random.randint(0, data_list[model_index][0].shape[0]-1)) for i in range(batchsize)] 
+                        data, targets = pilot_data.copy_windows_from_data(data_list, data_list[model_index][0].shape[1], indices)
+                    else:#BUG this functionality does not work if batch size of data tuple is not equal to batchsize of model
+                        data = data_list[model_index][0] #take data out of model_index-th batch-tuple (grouped)
+                        targets = data_list[model_index][1] #take labels out of model_index-th batch-tuple (grouped)
+                    #import pdb;pdb.set_trace()
+                    # initialize network with 0 initial state
+                    initial_state = session.run(mtrain.initial_state)
+                    results = run_batch_unrolled(session, 
+                            mtrain, 
+                            data, #data 
+                            targets, #targets
+                            mtrain.train_op, #eval op
+                            initial_state,
+                            writer = writer, #frame writer
+                            verbose = False) #matfile=location+"/trainstates_"+str(i)+".mat")
+                    result_list.append(results)
+                    #import pdb;pdb.set_trace()
+                if len(result_list) ==0:
+                    raise IndexError('datalist has a smaller batchsize than is required for this model.')
+                results=[]
+                for r in range(len(result_list[0])):#average over batches that belong to this model
+                    results.append(sum([res[r] for res in result_list])/len(result_list))
+        # In case of validation ==> there is only 1 model
         else:
+            
             #define model
             mvalid = models[0]
-            results = pilot_eval.run_one_step_unrolled(session, 
+            for m_ind in range(len(data_list)): #loop over different movies (saved in tuples)
+                if not FLAGS.preloading: data = pilot_data.get_data_from_indices(data_list, data_list[m_ind][0].shape[1], np.array([[m_ind, 0, 0]]))
+                else: data = data_list[m_ind][0]
+                print data.shape
+                results = pilot_eval.run_one_step_unrolled(session, 
                                                        mvalid, 
-                                                       data_list[model_index][0],#one movie is copied into ram... 
-                                                       data_list[model_index][1], 
+                                                       data,#one movie is copied into ram... 
+                                                       data_list[m_ind][1], 
                                                        tf.no_op(), 
                                                        writer = writer, 
                                                        verbose = False) #matfile=location+"/valstates_"+str(epoch_index)+".mat")
-            
+                result_list.append(results)
+            results=[]
+            for r in range(len(result_list[0])):#average over batches that belong to this model
+                results.append(sum([res[r] for res in result_list])/len(result_list))
         model_results.append(results)
     if len(model_results) == 1 and result_list:
-        return result_list
+        return result_list #return result lists in case of 1 model
     else:
         return model_results
     
@@ -396,6 +430,7 @@ def main(_):
     # labels is an array of shape [batch_of_movies, movie_length, output_dimension]
     data_time = time.time()
     training_data_list = pilot_data.prepare_data_general(config.training_objects)
+    #import pdb; pdb.set_trace()
     #else : training_data_list = pilot_data.prepare_data_list(config.training_objects)
     #validation set is always one movie with batchsize one and tested with stepsize 1
     if len(config.validate_objects) != 0:
@@ -404,9 +439,9 @@ def main(_):
     
     #set params according to the shape of the obtained data
     config.output=training_data_list[0][1].shape[2]
-    config.feature_dimension=training_data_list[0][0].shape[2]
-    if FLAGS.fc_only:
-        config.feature_dimension=FLAGS.step_size_fnn*training_data_list[0][0].shape[2]
+    #config.feature_dimension=training_data_list[0][0].shape[2] # TODO
+    #if FLAGS.fc_only:
+    #config.feature_dimension=FLAGS.step_size_fnn*training_data_list[0][0].shape[2]
         
     #import pdb; pdb.set_trace()
     # Tell TensorFlow that the model will be built into the default Graph.
@@ -416,8 +451,10 @@ def main(_):
         
     # Define the batchsizes and window_sizes (numsteps) for the different models during training
     if FLAGS.batchwise_learning:
-        batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
+        #batch_sizes = [training_tuple[0].shape[0] for training_tuple in training_data_list]
+        batch_sizes = [5]
         window_sizes = [training_tuple[0].shape[1] for training_tuple in training_data_list]
+        #import pdb; pdb.set_trace()
     else: # in case of windowwise learning
         #window_sizes = [50, 100, 500] 
         #batch_sizes = [30, 15, 3] #12G
@@ -464,7 +501,9 @@ def main(_):
             with tf.variable_scope("model", reuse=False, initializer=initializer) as model_scope:
                 config.batch_size = batch_sizes[windex]
                 config.num_steps = window_sizes[windex]
-                mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
+                #mtrain = pilot_model.LSTMModel(True, config.output, config.feature_dimension, 
+                                            #config.batch_size, config.num_steps, 'train')
+                mtrain = pilot_model.LSTMModel(True, config.output, FLAGS.feature_dimension,
                                             config.batch_size, config.num_steps, 'train')
                 trainingmodels.append(mtrain)
             # Reuse the defined weights but initialize with random_uniform_initializer
@@ -477,7 +516,8 @@ def main(_):
                                                 #config.batch_size, config.num_steps, 'train')
                         #trainingmodels.append(mtrain)       
                 FLAGS.gpu = False
-                mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+                #mvalid = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+                mvalid = pilot_model.LSTMModel(False, config.output,FLAGS.feature_dimension, prefix='eval')
             
             print "Loading models finished... ", print_time(start_time)
             print "Number of models: ", len(trainingmodels)

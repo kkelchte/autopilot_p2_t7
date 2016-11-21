@@ -29,6 +29,9 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_string(
     "feature_type", "app",
     "app or flow or or depth_estimate or both.")
+tf.app.flags.DEFINE_integer(
+    "feature_dimension", 2048,
+    "define the size of the features according to n-step-FC and network.")
 tf.app.flags.DEFINE_string(
     "dataset", "generated",
     "pick the dataset in data_root from which your movies can be found.")
@@ -68,6 +71,12 @@ tf.app.flags.DEFINE_boolean(
 tf.app.flags.DEFINE_float(
     "scale", "0.2", 
     "Define the rate at which the learning rate decays.")
+tf.app.flags.DEFINE_boolean(
+    "preloading", True,
+    "Choose whether the data is totally loaded in the beginning or only at the moment it is necessary.")
+tf.app.flags.DEFINE_integer(
+    "cut_end", 0,
+    "Choose how many frames of the end are left out in order to avoid too large gradients.")
 
 class DataError(Exception):
     def __init__(self, value):
@@ -75,37 +84,49 @@ class DataError(Exception):
     def __str__(self):
         return repr(self.value)
  
-def extract_features(filename, network='pcnn'):
+def extract_features(filename, network='inception', load_data=True):
     """Extract the features from a mat file into an ndarray [features of frame 0, frame 1, frame 2, ...] 
     Args:
         filename: the path pointing to a mat file keeping the features
         network: the type of features found in this file ==> need of different extraction
     Returns:
-        2darray object containing features of each frame
+        2darray object containing features of each frame [movie_length, feature_dimension]
     """
     #print 'Extracting '+str(filename)
     #print 'network: ', network
+    
+    #define feature size
+    if network == 'pcnn': FLAGS.feature_dimension = 4096
+    elif network == 'inception': FLAGS.feature_dimension = 2048
+    elif (network == 'logits') or (network == 'logits_noisy'): FLAGS.feature_dimension = 4
+    elif network == 'stijn': FLAGS.feature_dimension = 4070
+    
+    #check out the features
     data = sio.loadmat(filename)
     if network == 'pcnn': 
-        feats = data['features'][0,0][1]
-        if feats.shape[1]!=4096:
-            loggin.warning("dimensions mismatch with pcnn features, should be 4096")       
-    elif network == 'inception': 
+        feats = data['features'][0,0][1]      
+    elif network == 'inception':
         feats = data['features']
-        if feats.shape[1]!=2048:
-                loggin.warning("dimensions mismatch with inception features, should be 2048")       
     elif (network == 'logits') or (network == 'logits_noisy'): 
         feats = data['features']
-        if feats.shape[1]!=4:
-                loggin.warning("dimensions mismatch with logits features, should be 4")
     elif network == 'stijn':
         data=data['gazebo_sim_dataset']
         feats = data[0,0]['labels']
-        if feats.shape[1]!=4070:
-                loggin.warning("dimensions mismatch with stijn features, should be 4070")
+    
+    #check loaded feature dimension
+    if feats.shape[1]!=FLAGS.feature_dimension:
+        loggin.warning("dimensions mismatch with stijn features, should be "+str(FLAGS.feature_dimension))
+    
+    #cut the end of the movie in order to avoid strong gradients that are irrelevant
+    if FLAGS.cut_end != 0:
+        feats = feats[0:-FLAGS.cut_end, :]
+    
+    #send array of one zero back in case of no preloading
+    if not load_data: return np.zeros((feats.shape[0], 1), dtype=np.int8)
     return feats
+
    
-def load_images(directoryname, depth=False):
+def load_images(directoryname, depth=False, load_data=True):
     """Load the image in an 2d array [image 0, image 1, ... ]
     Args:
         directory name: path pointing to RGB dir with images
@@ -113,14 +134,22 @@ def load_images(directoryname, depth=False):
         2darray object containing oncatenated image for each frame
     """
     if not isdir(directoryname):
-        raise DataError("directory does not exist")
+        raise IOError("directory does not exist")
     image_names = [ f for f in listdir(directoryname) if f[-3:]=='jpg' ]
     scale=0.2
     if FLAGS.scale and FLAGS.scale != 4: scale = FLAGS.scale
     max_shape=int(360*640*3*scale*scale)
     if depth: max_shape=int(360*640*scale*scale)
+    FLAGS.feature_dimension = max_shape
+    
+    #cut the end of the movie in order to avoid strong gradients that are irrelevant
+    if FLAGS.cut_end != 0:
+        image_names = image_names[0:-FLAGS.cut_end, :]
+    
+    if not load_data: return np.zeros([len(image_names), 1], dtype=np.int8)
+    
     images = np.zeros([len(image_names),max_shape])
-    print 'shape of feature of: ',images.shape
+    #print 'shape of feature of: ',images.shape
     c=0
     for im_n in image_names:
         #print 'im_n ',im_n
@@ -135,13 +164,33 @@ def load_images(directoryname, depth=False):
         c=c+1
     return images
     
+def load_image(path_to_image, depth=False):
+    """Read in image from file and export as proper feature."""
+    scale = 0.2
+    if(FLAGS.scale != 4): scale=FLAGS.scale 
+    max_shape=int(360*640*3*scale*scale)
+    if(depth):max_shape=int(360*640*scale*scale)
+    if not os.path.isfile(path_to_image):
+        raise IOError("path_to_image does not exist.")
+    success=False
+    while not success:
+        try:
+            #import pdb; pdb.set_trace()
+            im_array = io.imread(path_to_image)
+            im_array = skimage.transform.rescale(im_array, 0.2)
+            success = True
+        except:
+            print 'failed to load',path_to_image
+            time.sleep(0.005)
+    return np.reshape(im_array, [1,1,max_shape])
+    
 def get_labels_from_directory(directoryname):
     """This functions extract the ground truth from the images in the RGB directory defined by the directoryname
     and return an array with labels for each frame"""
     directoryname = join(directoryname,'RGB')
     print 'Get labels from '+str(join(directoryname))
     if not os.path.isdir(directoryname):
-        raise DataError("directory does not exist: "+str(directoryname))
+        raise IOError("directory does not exist: "+str(directoryname))
         return -1
     files = [f for f in listdir(directoryname) if isfile(join(directoryname,f))]
     #obtain the label indicated after 'gt' from the names of the files
@@ -154,6 +203,11 @@ def get_labels_from_directory(directoryname):
     
     #go from list of strings to array of integers
     labels = np.array(labels).reshape((-1,1))
+    
+    #cut the end of the movie in order to avoid strong gradients that are irrelevant
+    if FLAGS.cut_end != 0:
+        labels = labels[0:-FLAGS.cut_end]
+    
     return labels
 
 def create_one_hot_labels(labels):
@@ -177,7 +231,7 @@ def get_labels_from_file(directory):
     """
     filename=join(directory,"control_info.txt")
     if not os.path.isfile(filename):
-        raise DataError("control file does not exist: "+str(filename))
+        raise IOError("control file does not exist: "+str(filename))
         return -1
     # read the filename and return the list.
     list_f = open(filename,'r')
@@ -187,7 +241,6 @@ def get_labels_from_file(directory):
     list_c = [l[:-1] for l in list_c]
     # cut the 10 continuous floats label in the beginning
     list_c = [l[10:] for l in list_c]
-    
     # extract a label
     labels = np.zeros([int(len(list_c)), len(re.findall("\s*\S+", list_c[0]))])
     for i in range(len(list_c)):
@@ -204,15 +257,20 @@ def get_labels_from_file(directory):
         labels[i,:]=np.array(lbl)
     
     # in case of normal inception features: RGB is only every second label:
-    if FLAGS.network == 'inception':#and not FLAGS.feature_type == both
-        labels=labels[range(1,len(list_c),2)]
+    #if FLAGS.network == 'inception':#and not FLAGS.feature_type == both
+    #    labels=labels[range(1,len(list_c),2)]
     
     # use only the 2 numbers that are not 0.8 or 0 as labels 
     if FLAGS.short_labels:
     	labels=labels[:,[2,5]]
+    
+    #cut the end of the movie in order to avoid strong gradients that are irrelevant
+    if FLAGS.cut_end != 0:
+        labels = labels[0:-FLAGS.cut_end, :]
+        
     return labels
 
-def prepare_data(data_objects):
+def prepare_data(data_objects, load_data=True):
     """
     Create batches for the listed data objects by obtaining the features and the labels.
     Creating different batches of the same size
@@ -228,7 +286,6 @@ def prepare_data(data_objects):
             normalized: boolean defining whether or not the data should be normalized (no clear improvements on this one so far)
             network: the features comming from the Pose-CNN network 'pcnn' or from the Inception network 'inception'
     """
-    
     # get data 
     data = []
     labels = []
@@ -252,21 +309,18 @@ def prepare_data(data_objects):
         if not FLAGS.one_hot:
             labels_obj = create_one_hot_labels(labels_obj)
             
-        #import pdb; pdb.set_trace()
         minfeat = labels_obj.shape[0]# see that labels, app and flow features are from the same number of frames
         feats_obj = []        
         for ftype in feature_types: #loop over feature types 'app' and 'flow' or one of them
             if FLAGS.network == 'pcnn': 
-                #feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'.mat', FLAGS.network)
-                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'.mat', FLAGS.network)
+                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'.mat', FLAGS.network, load_data=load_data)
             elif FLAGS.network == 'inception' or FLAGS.network == 'logits' or FLAGS.network == 'logits_noisy' or FLAGS.network == 'stijn': 
-                #feats = extract_features(directory+'/cnn_features/'+ftype+'_'+data_object+'_'+FLAGS.network+'.mat', FLAGS.network)
-                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'_'+FLAGS.network+'.mat', FLAGS.network)
+                feats = extract_features(data_object+'/cnn_features/'+ftype+'_'+object_name+'_'+FLAGS.network+'.mat', FLAGS.network, load_data=load_data)
             elif FLAGS.network == 'no_cnn':
-                feats = load_images(data_object+'/RGB')
+                feats = load_images(data_object+'/RGB', load_data=load_data)
             elif FLAGS.network == 'no_cnn_depth':
-                feats = load_images(data_object+'/depth', True)
-            else: raise DataError("network not known: ", FLAGS.network)
+                feats = load_images(data_object+'/depth', depth=True, load_data=load_data)
+            else: raise IOError("network not known: ", FLAGS.network)
             feats_obj.append(feats)
         #flow is on 2RBG images ==> skip first label to be equal
         if 'flow' in feature_types:
@@ -275,45 +329,46 @@ def prepare_data(data_objects):
             feats_obj[0] = feats_obj[0][0:-1] #shorten app list to be equal to flow list
             
         feats_obj = np.concatenate(feats_obj,1) #concatenate the list of features in the second dimension
-        #print "shape features:",feats_obj.shape
+        print "shape features:",feats_obj.shape
+        
+        #clean up the -1 s and zeros that come from stijns features
         if FLAGS.network == 'stijn':
-            #import pdb;pdb.set_trace()
             rgb_indices=[]
             #check out the features of value -1 and remove these features + labels from the list
             # Assume that if stijns depth estimate is used this is in front of the array of feature types
             for i in range(feats_obj.shape[0]):
-                if not (feats_obj[i,0] == -1 and feats_obj[i,1] == -1 and feats_obj[i,2] == -1) and not (feats_obj[i,0] == 0 and feats_obj[i,1] == 0 and feats_obj[i,2] == 0):
-                    rgb_indices.append(i)
-            #print 'rgb indices: ',rgb_indices
+                if not (feats_obj[i,0] == -1 and feats_obj[i,1] == -1 and feats_obj[i,2] == -1) and not (feats_obj[i,0] == 0 and feats_obj[i,1] == 0 and feats_obj[i,2] == 0): rgb_indices.append(i)
             try:
                 feats_obj=feats_obj[rgb_indices,:]
                 labels_obj=labels_obj[rgb_indices,:]
             except IndexError:
                 print 'IndexError: ',rgb_indices[-1],'>=',min([labels_obj.shape[0], feats_obj.shape[0]])
+        
         # make them equal lenght: might have missed out some label/feature        
         labels_obj = labels_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
         feats_obj = feats_obj[0:min(labels_obj.shape[0],feats_obj.shape[0])]
-        
-        if not labels_obj.shape[0]==feats_obj.shape[0]:
-            raise DataError("labels vs features mismatch: "+str(labels_obj.shape[0])+"!="+str(feats_obj.shape[0]))
+        if abs(labels_obj.shape[0]-feats_obj.shape[0])>50:
+            raise IOError("labels vs features mismatch: "+str(labels_obj.shape[0])+"!="+str(feats_obj.shape[0]))
         
         data.append(feats_obj)
         labels.append(labels_obj)
         if min_steps > labels_obj.shape[0]:#get number of frames of shortest movie
             min_steps = labels_obj.shape[0]   
-    #import pdb;pdb.set_trace()
+    
     if FLAGS.sample>=min_steps:
-        raise DataError("downsampling is larger than total data set "+str(FLAGS.sample)+">="+str(min_steps))
+        raise IOError("downsampling is larger than total data set "+str(FLAGS.sample)+">="+str(min_steps))
         
     # resize according to num_steps of shortest video
     # and downsample in time to get a frame every 10 or 100 frames
     ds_data = np.zeros((len(data),int(min_steps/FLAGS.sample),data[0].shape[1]))
     ds_labels = np.zeros((len(data), int(min_steps/FLAGS.sample), labels[0].shape[1]))
+    #print ds_data.shape
+    #print ds_labels.shape
     
     #loop over batches (in this implementation is this always 1 batch)
     for b in range(len(data)):
         j=0
-        for i in range(min_steps):
+        for i in range(min_steps): #loop over different timesteps
             if (i%FLAGS.sample) == 0 and j<ds_data.shape[1]:
                 ds_data[b,j]= data[b][i]
                 ds_labels[b,j]=labels[b][i]
@@ -321,7 +376,7 @@ def prepare_data(data_objects):
     
     #import pdb;pdb.set_trace()
     #Normalize the subsampled features if necessary
-    if FLAGS.normalized:
+    if FLAGS.normalized and load_data:
         norm_data = np.zeros(ds_data.shape)
         data = sio.loadmat('mean_variance_'+FLAGS.feature_type+"_"+FLAGS.network+'.mat')
         mean = data['mean']
@@ -331,7 +386,6 @@ def prepare_data(data_objects):
             for j in range(ds_data.shape[1]):
                 norm_data[i,j,:]=(ds_data[i,j,:]-mean[0])/(np.sqrt(variance[0])+epsilon)
         ds_data = norm_data
-        #import pdb; pdb.set_trace()
     return ds_data, ds_labels
 
     #return data, labels
@@ -344,8 +398,8 @@ def prepare_data_list(data_objects):
     object_list = []
     for d_object in data_objects:
         print "object: ",os.path.basename(d_object)
-        object_data, object_labels = prepare_data([d_object])
-        object_tuple = (object_data, object_labels)
+        object_data, object_labels = prepare_data([d_object], FLAGS.preloading)
+        object_tuple = (object_data, object_labels, [d_object])
         object_list.append(object_tuple)
     return object_list
 
@@ -375,8 +429,8 @@ def prepare_data_grouped(data_objects):
     differences = np.array(differences, dtype=dtype)
     differences = np.sort(differences, order='difference')
     #print differences
-    ### ! changed minimum difference from 50 to 100 !
-    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(100/FLAGS.sample)]
+    ### ! changed minimum difference from 50 to 100 to 150 !
+    split_indices = [differences[i][1] for i in range(len(differences)) if differences[i][0]>(150/FLAGS.sample)]
     #print split_indices
     
     # create a list of groups (lists) of movies which length  differs more than 50 frames
@@ -512,23 +566,23 @@ def pick_random_windows(data_list, window_sizes, batch_sizes):
         			[tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
         
     '''
-    feature_size = data_list[0][0].shape[2]
     output_size = data_list[0][1].shape[2]
-    #print 'feature_size: ', feature_size
     #print 'output_size: ', output_size
     
     ##preparation = define number of times the windowed-batched data should be iterated in one epoch
     if len(window_sizes) != len(batch_sizes):
     	raise SyntaxError('Number of windowsizes is not equal to number of batchsizes.')
-    	
+    #number of frames in one batch if there were no extra innerlist iterations	
     b_num_frames = sum([ window_sizes[i] * batch_sizes[i] for i in range(len(window_sizes))])
+    #total number available for one epoch
     d_num_frames = sum([ data_list[t][0].shape[0]*data_list[t][0].shape[1] for t in range(len(data_list))])
-    b_scale = max([1, int(d_num_frames/b_num_frames)]) #number of times the window-batches are repeated in one epoch
-    if FLAGS.max_num_windows > max(batch_sizes):
-    	if not FLAGS.fc_only:
-	        b_scale = min(b_scale, FLAGS.max_num_windows/max(batch_sizes)) #define max number of initial_state calculations for one epoch
-    else:#max_num_windows is set smaller than batch size so don't scale further.
+    #number of times the window-batches are repeated in one epoch
+    b_scale = max([1, int(d_num_frames/b_num_frames)])
+    if FLAGS.max_num_windows <= max(batch_sizes):
         b_scale = 1
+    elif not FLAGS.fc_only: #in case initial_state calculations are necessary use upper limit of max_num_windows
+        #else: #also clip for fc_only because otherwise innerlist becomes huge
+        b_scale = min(b_scale, FLAGS.max_num_windows/max(batch_sizes))
     print "multiply window batches ",b_scale," times in one epoch."
     total_indices = [] #to be returned in the end
     for wi in range(len(window_sizes)):#outer list over models
@@ -572,25 +626,31 @@ def pick_sliding_windows(data_list, window_sizes, batch_sizes):
     total_indices = [] #to be returned in the end
     for wi in range(len(window_sizes)):#outer list over models
     	#create list of tuples of movie and batch indices with movies longer than the required size
-    	possible_movies=[ ti for ti in range(len(data_list)) if data_list[ti][0].shape[1] > (window_sizes[wi])]
-    	#print possible_movies
-    	if len(possible_movies) == 0:
-    		raise SyntaxError('Windowsize '+str(window_sizes[wi])+' is too big for this set of data ['+str(max([data_list[i][0].shape[1] for i in range(len(data_list))]))+' max]. Consider using fully unrolled option with --batchwise_learning True.')
+    	possible_movies=[ (ti, bi) for ti in range(len(data_list)) for bi in range(data_list[ti][0].shape[0]) if  data_list[ti][0].shape[1] > window_sizes[wi]]
+    	#number of movies over which needs to be slided
+    	batch_size = batch_sizes[wi]
+    	if len(possible_movies) < batch_size:
+    		raise SyntaxError('Windowsize '+str(window_sizes[wi])+' is too big for this set of data ['+str(max([data_list[i][0].shape[1] for i in range(len(data_list))]))+' max]. Consider using fully unrolled option with --batchwise_learning True. Or set the sample rate lower.')
+    	
+    	#import pdb; pdb.set_trace()
+    	
     	b_indices = []
-    	#choose the tuples over which the time window is slided
-    	tup_ind = random.choice(possible_movies)
-    	start_ind = 0
-    	for mov_ind in range(data_list[tup_ind][0].shape[0]):
-    		b_indices.append(np.asarray([[tup_ind, mov_ind, start_ind]]))
-    	b_indices = np.concatenate(b_indices)
-    	#fill in the local indices while incrementing the start index
-    	local_indices = [] #list of length of the window with tuples corresponding to this window. The start index is shifted each time.
-    	for li in range(data_list[tup_ind][0].shape[1]-window_sizes[wi]):#take start indices up until the window_length-last frame
-    		b_indices_shifted = np.array(b_indices)
-    		b_indices_shifted[:,2]+=li
-    		local_indices.append(b_indices_shifted)
-    		#import pdb; pdb.set_trace()
-    	total_indices.append(local_indices)
+    	for bi in range(batch_size): #select a batch size number of movies over which is slided
+            #choose the movie over which the time window is slided
+            tup_ind, b_ind = random.choice(possible_movies)
+            b_indices.append((tup_ind, b_ind))
+        
+        #print b_indices 
+        #!!! we assume that all movies are more or less of equal length after grouping !!!
+        local_indices = []
+    	for start_ind in range(data_list[0][0].shape[1]-window_sizes[wi]):
+            int_mat = np.zeros([batch_size, 3], dtype=np.int)
+            int_mat[:,2]=start_ind #start index
+            int_mat[:,1]=[t[1] for t in b_indices] #movie index
+            int_mat[:,0]=[t[0] for t in b_indices] #tuple index
+            local_indices.append(int_mat)
+            #print str(int_mat)
+        total_indices.append(local_indices)
     return total_indices
 
 def copy_windows_from_data(data_list, window_size, indices):
@@ -599,23 +659,84 @@ def copy_windows_from_data(data_list, window_size, indices):
         data_list: list of tuples containing data and labels each arrays of size [batchsize, framelen, featuresize]
         windowsize: the windowsize needed corresponding to the list of unrolled networks to be trained
         batchsize: batchsizes for the window set according to the scale factor depending on the size of your RAM and GPU mem
-        indices: [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
+        indices: matrix with a row for each batchelement containing: [tuple index, movie index, start index] tuple index corresponds to the tuple in the data list, movie index is the index in the batch of that tuple and start index is the position of the window.
     Returns:
          the data and labels according to the windowsize and batchsize as set by the arguments.
     '''
     batch_size = indices.shape[0]
-    data = np.zeros((batch_size, window_size, data_list[0][0].shape[2]))
+    data = np.zeros((batch_size, window_size, FLAGS.feature_dimension))
     labels = np.zeros((batch_size, window_size, data_list[0][1].shape[2]))
-    for i in range(batch_size):
-        try:
+    try:
+        for i in range(batch_size):
             tup_ind, mov_ind, start_ind = indices[i]
-            data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
             labels[i] = data_list[tup_ind][1][mov_ind][start_ind:start_ind+window_size][:]
-        except ValueError:
-            print '[pilot_data]data: ', str(data[i].shape) ,' doesnt fit with original data: ', str(data_list[0][0][mov_ind][start_ind:start_ind+window_size][:].shape)
-            print '[pilot_data] tup ', tup_ind,' mov ',mov_ind,' start ',start_ind,' windowsize: ',window_size,' data length ', str(data_list[0][0][mov_ind].shape)
-            return None, None
+            #print 'i: ',i,' tup ', tup_ind,' mov ',mov_ind,' start ',start_ind
+            if FLAGS.preloading:
+                data[i] = data_list[tup_ind][0][mov_ind][start_ind:start_ind+window_size][:]
+        if not FLAGS.preloading:
+            data = get_data_from_indices(data_list, window_size, indices)
+            #print 'data received in copy window: ',data.shape
+            #print data
+    except ValueError:
+        print '[pilot_data]data: ', str(data[i].shape) ,' doesnt fit with original data: ', str(data_list[0][0][mov_ind][start_ind:start_ind+window_size][:].shape)
+        print '[pilot_data] tup ', tup_ind,' mov ',mov_ind,' start ',start_ind,' windowsize: ',window_size,' data length ', str(data_list[0][0][mov_ind].shape)
+        return None, None
     return data, labels
+
+def get_data_from_indices(data_list, window_size, indices):
+    '''get the features/images from the memory
+    Args:
+        data_list: list of tuples containing both labels and features. Features are filled with 1 zero instead of the feature vector.
+        window_size: the number of time steps that needs to be obtained.
+        indices: a list of arrays with 3 elements which indicates the tuple (~which data_batch/data_object), which movie(0), @ which start index
+    Returns:
+        data: 3d array [batchsize, time_steps, feature_dim]
+    '''
+    #FLAGS.preloading = True
+    movies=[i for i in range(indices.shape[0])]
+    # if i want to sort and reuse loaded movies:
+    #indices.view('i8,i8,i8').sort(order=['f1'], axis=0)
+    data = np.zeros([indices.shape[0], window_size, FLAGS.feature_dimension])
+    
+    def MyLoop(coord, movies):
+        while not coord.should_stop():
+            try:
+                i_ind = movies.pop()
+                print i_ind,' of ', movies
+                tup_ind, mov_ind, start_ind = indices[i_ind]
+                d_object = data_list[tup_ind][2][mov_ind]
+                #print str(i_ind),': obtain data from ',d_object,' : ', str(mov_ind),' starting at ', str(start_ind)
+                data_full, labels = prepare_data([d_object], load_data=True) #make sure you load even though preloading might be false.
+                #print data_full
+                data[i_ind] = data_full[0][start_ind:start_ind+window_size][:]
+                #print data[i_ind]
+            except IndexError:
+                #print 'Fetching data finished. Wait for threads to stop.'
+                coord.request_stop()
+        if len(movies)==0:
+            coord.request_stop()
+        coord.request_stop()
+    try:
+        # Main code: create a coordinator.
+        coord = tf.train.Coordinator()
+        # Create 10 threads that run 'MyLoop()'
+        #num_threads=min(10,len(all_movies)/2)
+        # each batch for a certain model can be prepared with another thread
+        num_threads=len(movies)
+        num_threads=min(FLAGS.max_num_threads, num_threads)
+        threads = [tf.train.threading.Thread(target=MyLoop, args=(coord,movies)) for i in xrange(num_threads)]
+        print 'number of threads: ',num_threads
+        # Start the threads and wait for all of them to stop.
+        for t in threads: t.start()
+        coord.join(threads, stop_grace_period_secs=240) #wait max 4minutes to stop threads before raising exception
+    except RuntimeError:
+        print "Thread took more than 4 minutes to sleep so we sleep for an extra 4 minutes..."
+        time.sleep(240)
+    except Exception as e:
+        print "Thread is still not ready so something is probably wrong? Or this is raised by another type of exception.", e.value
+    
+    #FLAGS.preloading = False
+    return data
 #####################################################################
 
 if __name__ == '__main__':
@@ -641,23 +762,45 @@ if __name__ == '__main__':
     #validate_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in validate_objects]
     #test_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in test_objects]
     
-    FLAGS.dataset='sequential_oa_depth'
+    FLAGS.dataset='sequential_oa'
     training_objects, validate_objects, test_objects = get_objects()
     
-    #FLAGS.dataset='tiny_set'
-    #training_objects = ['0000']
+    #FLAGS.dataset='sequential_oa'
+    #training_objects = ['sequential_oa_0000_0_1', 'sequential_oa_0000_0_2']
     #training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in training_objects]
-    
-    print training_objects
-    
-    FLAGS.network = 'no_cnn_depth'
+    #FLAGS.network = 'no_cnn_depth'
     FLAGS.scale = 0.1
     
-    trainingset = prepare_data_list(training_objects)
+    
+    
+    #FLAGS.dataset='tiny_set'
+    #training_objects = ['0000', '0010']
+    #training_objects = [os.path.join(FLAGS.data_root,FLAGS.dataset,o) for o in training_objects]
+    ##FLAGS.network = 'inception'
+    #FLAGS.preloading = False
+    #FLAGS.scale = 0.1
+
+    #print training_objects
+    FLAGS.data_type='grouped'
+    print FLAGS.sample
+    trainingset = prepare_data_general(training_objects)
+    
+    #trainingset = prepare_data_list(training_objects)
+    print trainingset[0][0].shape
+    window_sizes=[20]
+    batch_sizes=[5]
+    FLAGS.fc_only = False
+    inds_r = pick_random_windows(trainingset, window_sizes, batch_sizes)
+    inds = pick_sliding_windows(trainingset, window_sizes, batch_sizes)
+    print 'inds_r ', len(inds_r),', ', len(inds_r[0]), ', ', inds_r[0][0].shape
+    print 'inds ', len(inds),', ', len(inds[0]), ', ', inds[0][0].shape
+    data, labels = copy_windows_from_data(trainingset, window_sizes[0], inds[0][0])
+    print data.shape
+    print labels.shape
+    print data[0][0]
     import pdb; pdb.set_trace()
     
-    #window_sizes=[1]
-    #batch_sizes=[5]
+    
     
     #window_indices = pick_random_windows(trainingset, window_sizes, batch_sizes)
     #data, targets = copy_windows_from_data(trainingset, 4, window_indices[0][0])

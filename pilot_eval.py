@@ -162,7 +162,7 @@ def get_initial_states(models, indices, meval, data_list, sess):
     Use a seperate session in order to keep the memory at low level.
     Args:
         models: training models of which model.initial_state has to be set.
-        indices: the tuple/mov/start indices indicating the training window for that batch.
+        indices: the nested list of tuple/mov/start indices indicating the training window for that batch.
         meval: the evaluation (validation) model used.
         data_list: the original list of grouped tuples according to movie lengths
     Return:
@@ -173,8 +173,7 @@ def get_initial_states(models, indices, meval, data_list, sess):
     #create pop up list with all index_tuples of indices from which an initial states needs to be found
     all_movies=[ (oi, ii) for oi in range(len(indices)) for ii in range(len(indices[oi]))]
     total_indices = copy.deepcopy(indices)
-    
-        
+            
     #start some threads and a coordinator
     #each thread should do:
     #   pop index
@@ -198,9 +197,12 @@ def get_initial_states(models, indices, meval, data_list, sess):
                     #import pdb; pdb.set_trace()
                     [tup_ind, mov_ind, start_ind] = indices[oi][ii][ib] #get indices needed for finding data
                     state = sess.run(meval.initial_state) #initialize eval network with zero state
+                    if not FLAGS.preloading : data = pilot_data.get_data_from_indices(data_list, data_list[tup_ind][0].shape[1], np.array([[tup_ind, mov_ind, 0]]))
+                    else: data = data_list[tup_ind][0][mov_ind:mov_ind+1]
+                    print data.shape
                     if not FLAGS.skip_initial_state:
                         for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
-                            feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]), meval.initial_state: state}
+                            feed_dict = {meval.inputs: np.array([[data[mov_ind,f,:]]]), meval.initial_state: state}
                             outputs, state = sess.run([meval.logits, meval.state], feed_dict)
                             #state = sess.run([meval.state], feed_dict)
                         #import pdb; pdb.set_trace()
@@ -257,13 +259,61 @@ def get_initial_states_single(models, indices, meval, data_list, sess):
                     [tup_ind, mov_ind, start_ind] = indices[im][il][ib] #get indices needed for finding data
                     #state = get_state(meval, start_ind, tup_ind, mov_ind, data_list)
                     state = sess.run(meval.initial_state) #initialize eval network with zero state
+                    if not FLAGS.preloading: data = pilot_data.get_data_from_indices(data_list, data_list[tup_ind][0].shape[1], np.array([[tup_ind, mov_ind, 0]]))
+                    else: data=data_list[tup_ind][0]
                     for f in range(start_ind): #step through data sequence up until the start of the trainingswindow
-                        feed_dict = {meval.inputs: np.array([[data_list[tup_ind][0][mov_ind,f,:]]]),
+                        feed_dict = {meval.inputs: np.array([[data[mov_ind,f,:]]]),
                             meval.initial_state: state}
                         outputs, state = sess.run([meval.logits, meval.state], feed_dict)
                     #state = sess.run([meval.state], feed_dict)
                     initial_states[ib]=state
                 initial_states_local.append(initial_states)
+        initial_states_all.append(initial_states_local)
+    return initial_states_all
+
+def get_initial_states_sliding(models, indices, meval, data_list, sess):
+    '''Get the needed initial states for the models to be trained according to the initial state a starting index from a sliding window.
+    Args:
+        models: training models of which model.initial_state has to be calculated.
+        indices: the nested list of tuple/mov/start indices indicating the training window for that batch.
+        meval: the evaluation (validation) model used.
+        data_list: the original list of grouped tuples according to movie lengths
+    Return:
+        resulting states listed up in nested lists: the outer list corresponding to the number of models
+        the inner list corresponding to the number of times a window batch is applied in one epoch.
+    '''
+    initial_states_all = []
+    total_num_of_states = len(models)*len(indices[0])*indices[0][0].shape[0]
+    count = 0
+    for im in range(len(models)):#index for model aka windowsize and batch size
+        model = models[im]
+        zerostate = sess.run(model.initial_state)
+        #print 'zerostate: ',zerostate
+        initial_states_per_batch = [] #list for each time a batch-window is applied in one epoch
+        for ib in range(indices[im][0].shape[0]): #loop over different movies while keeping the initial states
+            [tup_ind, mov_ind, start_ind] = indices[im][0][ib]
+            #print 'movie: ',ib, " with indices: ",tup_ind," ",mov_ind," ",start_ind
+            state = sess.run(meval.initial_state) #initialize eval network with zero state
+            if not FLAGS.preloading: 
+                data = pilot_data.get_data_from_indices(data_list, data_list[tup_ind][0].shape[1], np.array([[tup_ind, mov_ind, 0]]))
+            else: data=data_list[tup_ind][0]
+            state_list = []
+            state_list.append(state)
+            for f in range(len(indices[im])): #step through data sequence while keeping states for this movie
+                feed_dict = {meval.inputs: np.array([[data[mov_ind,f,:]]]),
+                    meval.initial_state: state}
+                outputs, state = sess.run([meval.logits, meval.state], feed_dict)
+                state_list.append(state)
+            initial_states_per_batch.append(state_list)
+        #Rearrange list of list of states for each frame in each movie of this batch
+        #to a list of frames with each frame a matrix [batch of movies, initial state]
+        initial_states_local=[]
+        for f in range(len(indices[im])):
+            initial_states = np.zeros(zerostate.shape)
+            for ib in range(indices[im][0].shape[0]):
+                initial_states[ib]=initial_states_per_batch[ib][f]
+            initial_states_local.append(initial_states)
+        
         initial_states_all.append(initial_states_local)
     return initial_states_all
     
@@ -274,10 +324,9 @@ def evaluate(logfolder, config, scope="model"):
     with tf.Graph().as_default():
         test_data_list = pilot_data.prepare_data_list(config.test_objects)
         config.output=test_data_list[0][1].shape[2]
-        config.feature_dimension=test_data_list[0][0].shape[2]*FLAGS.step_size_fnn
         #set params according to the shape of the obtained data
         with tf.variable_scope(scope):
-            mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+            mtest = pilot_model.LSTMModel(False, config.output, FLAGS.feature_dimension, prefix='eval')
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
@@ -295,6 +344,9 @@ def evaluate(logfolder, config, scope="model"):
             for j in range(len(test_data_list)):
                 if j in movies_to_write_away: wrtr = writer
                 else: wrtr = None
+                
+                if not FLAGS.preloading: data = pilot_data.get_data_from_indices(test_data_list, test_data_list[j][0].shape[1], np.array([[j, 0, 0]]))
+                else: data = test_data_list[j][0]
                 #get the shape of the inner state of the model
                 #prestate = session.run(mtest.zero_state)
                 #initial_state = np.zeros(prestate.shape)
@@ -302,7 +354,7 @@ def evaluate(logfolder, config, scope="model"):
                 #session.run(tf.assign(mtest.initial_state, initial_state))
                 results = run_one_step_unrolled(session, 
                                             mtest, 
-                                            test_data_list[j][0], 
+                                            data, 
                                             test_data_list[j][1], 
                                             tf.no_op(),
                                             writer=wrtr,
@@ -330,24 +382,7 @@ def evaluate(logfolder, config, scope="model"):
             #print 'min accuracy: ',acc_min
             #print 'average perplexity: ',per
     print 'evaluation...finished!'
-    
-def load_image(path_to_image):
-    """Read in image from file and export as proper feature."""
-    scale=0.2
-    max_shape=int(360*640*3*scale*scale)
-    if not os.path.isfile(path_to_image):
-        raise IOError("path_to_image does not exist.")
-    success=False
-    while not success:
-        try:
-            #import pdb; pdb.set_trace()
-            im_array = io.imread(path_to_image)
-            im_array = skimage.transform.rescale(im_array, 0.2)
-            success = True
-        except:
-            print 'failed to load',path_to_image
-            time.sleep(0.005)
-    return np.reshape(im_array, [1,1,max_shape])
+
 
 def evaluate_online(logfolder, config, scope="model"):
     """This function is called from the main thread and coordinates the one step evaluation.
@@ -368,6 +403,9 @@ def evaluate_online(logfolder, config, scope="model"):
     
     if FLAGS.network == 'no_cnn':
         source_dir = '/esat/emerald/tmp/remote_images/set_online/RGB/'
+        des_dir = '/esat/emerald/tmp/control_output/'
+    elif FLAGS.network == 'no_cnn_depth':
+        source_dir = '/esat/emerald/tmp/remote_images/set_online/depth/'
         des_dir = '/esat/emerald/tmp/control_output/'
     elif FLAGS.ssh:
         source_dir = '/esat/'+FLAGS.machine+'/tmp/remote_features/'
@@ -391,18 +429,21 @@ def evaluate_online(logfolder, config, scope="model"):
             config.feature_dimension = 2048
         elif FLAGS.network == 'no_cnn':
             config.feature_dimension = 360*640*3*0.2*0.2
+        elif FLAGS.network == 'no_cnn_depth':
+            config.feature_dimension = 360*640*0.2*0.2
         if FLAGS.normalized:
             #load normalization matrices:
             data = sio.loadmat('mean_variance_'+FLAGS.feature_type+"_"+FLAGS.network+'.mat')
             mean = data['mean']
             variance = data['variance']
             data = None
-        if FLAGS.step_size_fnn > 1:
-            print 'adjust feature feature_dimension'
-            config.feature_dimension=FLAGS.step_size_fnn*config.feature_dimension
+        #if FLAGS.step_size_fnn > 1:
+            #config.feature_dimension=FLAGS.step_size_fnn*config.feature_dimension
+            #print 'adjust feature_dimension ', config.feature_dimension
+            
         device_name='/gpu:0'
         with tf.variable_scope(scope), tf.device(device_name):
-            mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+            mtest = pilot_model.LSTMModel(False, config.output,config.feature_dimension, prefix='eval')
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
         # Start session
@@ -455,23 +496,41 @@ def evaluate_online(logfolder, config, scope="model"):
                         f = open(current_feature)
                         FLAGS.model_name = f.read()[:-1]#skip the \n
                         FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
-                        if FLAGS.model_name == 'dagger_big_net_stijn_depth' :
-                            FLAGS.network = 'stijn'
-                            config.feature_dimension = 4070
-                        else :
-                            config.feature_dimension = 2048
-                        if FLAGS.model_name == 'dagger_hsz_400_fc':
-                            FLAGS.fc_only = True
-                            FLAGS.hidden_size=400
-                        else :
-                            FLAGS.fc_only = False
-                            FLAGS.hidden_size=100
-                        if FLAGS.model_name == 'straight' :
-                            FLAGS.fly_straight = True
-                            FLAGS.model_name = 'dagger_4G_wsize_300'
-                            FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
-                        else:
-                            FLAGS.fly_straight = False
+                        if os.path.isfile(os.path.join(FLAGS.model_dir, 'configuration.xml')):
+                            print 'parsing configuration file in ',FLAGS.model_dir
+                            tree=ET.parse(os.path.join(FLAGS.model_dir, 'configuration.xml'))
+                            root=tree.getroot()
+                            flgs=root.find('flags')
+                            for flg in flgs:
+                                if flg.tag != 'model_dir' and flg.tag != 'model_name' and flg.tag != 'online':
+                                    value = ''
+                                    try:
+                                        value = int(flg.text)
+                                    except ValueError:
+                                        try:
+                                            value = float(flg.text)
+                                        except ValueError:
+                                            if flg.text == 'False': value = False
+                                            elif flg.text == 'True': value = True
+                                            else :  value = flg.text
+                                    FLAGS.__dict__['__flags'][flg.tag] = value
+                        #if FLAGS.model_name == 'dagger_big_net_stijn_depth' :
+                            #FLAGS.network = 'stijn'
+                            #config.feature_dimension = 4070
+                        #else :
+                            #config.feature_dimension = 2048
+                        #if FLAGS.model_name == 'dagger_hsz_400_fc':
+                            #FLAGS.fc_only = True
+                            #FLAGS.hidden_size=400
+                        #else :
+                            #FLAGS.fc_only = False
+                            #FLAGS.hidden_size=100
+                        #if FLAGS.model_name == 'straight' :
+                            #FLAGS.fly_straight = True
+                            #FLAGS.model_name = 'dagger_4G_wsize_300'
+                            #FLAGS.model_dir = '/esat/qayd/kkelchte/tensorflow/lstm_logs/'+FLAGS.model_name
+                        #else:
+                            #FLAGS.fly_straight = False
                         if FLAGS.model_name=='finished':
                             sys.exit(0)
                         g = None
@@ -480,11 +539,11 @@ def evaluate_online(logfolder, config, scope="model"):
                         saver = None
                         with g.as_default():
                             with tf.variable_scope(scope), tf.device('/gpu:0'):
-                                mtest = pilot_model.LSTMModel(False, config.output, config.feature_dimension, prefix='eval')
+                                mtest = pilot_model.LSTMModel(False, config.output, FLAGS.feature_dimension, prefix='eval')
                             saver = tf.train.Saver()
                             session = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
                             saver.restore(session, FLAGS.model_dir+"/model.ckpt")
-                            local_state = session.run(mtest.initial_state)
+                            if not FLAGS.fc_only: local_state = session.run(mtest.initial_state)
                             last_feature='%s' % current_feature
                             raise Exception('loaded new network: '+FLAGS.model_name)
                             #import pdb; pdb.set_trace()
@@ -506,7 +565,9 @@ def evaluate_online(logfolder, config, scope="model"):
                         feature=data[0,0]['labels']
                         feature = np.reshape(feature,(1,1,4070))
                     elif FLAGS.network == 'no_cnn':
-                        feature=load_image(current_feature)
+                        feature=pilot_data.load_image(current_feature)
+                    elif FLAGS.network == 'no_cnn_depth':
+                        feature=pilot_data.load_image(current_feature, True)
                     if FLAGS.normalized:
                         #print 'normalize feature: ',feature
                         epsilon = 0.001
