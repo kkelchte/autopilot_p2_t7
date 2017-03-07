@@ -2,7 +2,7 @@ My LSTM Autopilot
 
 Folder content:
 
-projectfiles:
+function of the code:
 > pilot_CNN: extract features of pretrained CNN (inception) saved as pb-txt-pbtxt file.
 > pilot_data_prepare: aid functions for preparing the data in pilot_data.
 > pilot_data: obtain and prepare features of all data object movies and fully preload the data
@@ -14,8 +14,7 @@ projectfiles:
 > pilot_states: creating image with overview of inner states.
 > pilot_train: Main script for training the LSTM model on features.
 
-extra:
-> tmp_scripts: temporal scripts used for preparing data, running jobs, cleaning results, ...
-> *.pyc: bytecodes
-> __init__.py: file claiming this folder as a package
-
+Dependencies:
+> cuda 7.5
+> tensorflow 0.9
+> pretrained inception model
