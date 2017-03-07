@@ -14,7 +14,7 @@ function of the code:
 > pilot_states: creating image with overview of inner states.
 > pilot_train: Main script for training the LSTM model on features.
 
-Dependencies:
+Some dependencies:
 > cuda 7.5
 > tensorflow 0.9
 > pretrained inception model
